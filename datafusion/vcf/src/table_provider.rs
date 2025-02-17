@@ -68,6 +68,7 @@ pub struct VcfTableProvider {
     info_fields: Vec<String>,
     format_fields: Vec<String>,
     schema: SchemaRef,
+    thread_num: Option<usize>,
 }
 
 impl VcfTableProvider {
@@ -75,6 +76,7 @@ impl VcfTableProvider {
         file_path: String,
         info_fields: Vec<String>,
         format_fields: Vec<String>,
+        thread_num: Option<usize>,
     ) -> datafusion::common::Result<Self> {
         let schema = determine_schema_from_header(&file_path, &info_fields, &format_fields)?;
         Ok(Self {
@@ -82,6 +84,7 @@ impl VcfTableProvider {
             info_fields,
             format_fields,
             schema,
+            thread_num
         })
     }
 }
@@ -113,6 +116,7 @@ impl TableProvider for VcfTableProvider {
             format_fields: self.format_fields.clone(),
             projection: projection.cloned(),
             limit,
+            thread_num: self.thread_num,
         }))
     }
 }
