@@ -1,5 +1,9 @@
+use std::fs::File;
+use std::io::Error;
+use std::num::NonZero;
 use noodles::{bgzf, vcf};
-use noodles_bgzf::AsyncReader;
+use noodles::vcf::io::Reader;
+use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
 use opendal::layers::LoggingLayer;
 use opendal::services::Gcs;
@@ -139,7 +143,11 @@ pub async fn get_remote_vcf_reader(file_path: String) -> vcf::r#async::io::Reade
 }
 
 
-
+pub fn get_local_vcf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
+    File::open(file_path)
+        .map(|f| noodles_bgzf::MultithreadedReader::with_worker_count(NonZero::new(thread_num).unwrap(), f))
+        .map(vcf::io::Reader::new)
+}
 
 
 
