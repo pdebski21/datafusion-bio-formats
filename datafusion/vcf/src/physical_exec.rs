@@ -23,6 +23,8 @@ use env_logger::builder;
 use log::{debug, info};
 use noodles::vcf;
 use noodles::vcf::Header;
+use noodles::vcf::header::Infos;
+use noodles::vcf::header::record::value::map::Info;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use noodles::vcf::io::Reader;
 use noodles::vcf::variant::Record;
@@ -138,7 +140,6 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
     let mut quals: Vec<f64> = Vec::with_capacity(batch_size);
     let mut filters: Vec<String> = Vec::with_capacity(batch_size);
 
-    // let infos: Vec<Vec<FieldBuilder>> = Vec::with_capacity(batch_size);
     let mut count: usize = 0;
     let mut record_num = 0;
     let mut batch_num = 0;
@@ -147,9 +148,10 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
     let thread_num = thread_num.unwrap_or(1);
     let mut reader = get_local_vcf_reader(file_path, thread_num)?;
     let header = reader.read_header()?;
+    let infos = header.infos();
 
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
-    set_info_builders(batch_size, info_fields, &header, &mut info_builders);
+    set_info_builders(batch_size, info_fields, &infos, &mut info_builders);
 
     let iter  = std::iter::from_fn(move || {
 
@@ -198,8 +200,9 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
 async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size: usize, info_fields: Option<Vec<String>>) -> datafusion::error::Result<AsyncStream<datafusion::error::Result<RecordBatch>, impl Future<Output=()> + Sized>> {
     let mut reader = get_remote_vcf_reader(file_path.clone()).await;
     let header = reader.read_header().await?;
+    let infos = header.infos();
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
-    set_info_builders(batch_size, info_fields, &header, &mut info_builders);
+    set_info_builders(batch_size, info_fields, &infos, &mut info_builders);
 
     let stream = try_stream! {
         // Create vectors for accumulating record data.
@@ -217,9 +220,7 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
 
         let mut record_num = 0;
         let mut batch_num = 0;
-        let mut batch_elem_num = 0;
-        let mut batch_elem_none = 0;
-        let mut batch_elem_other = 0;
+
 
         // Process records one by one.
         let mut records = reader.records();
@@ -240,9 +241,6 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
 
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
-                debug!("Batch elements: {:?}", batch_elem_num);
-                debug!("Batch elements null: {:?}", batch_elem_none);
-                debug!("Batch elements other: {:?}", batch_elem_other);
                 debug!("Record number: {}", record_num);
                 let batch = build_record_batch(
                     Arc::clone(&schema.clone()),
@@ -295,9 +293,9 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
     Ok(stream)
 }
 
-fn set_info_builders(batch_size: usize, info_fields: Option<Vec<String>>, header: &Header, info_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>)) {
+fn set_info_builders(batch_size: usize, info_fields: Option<Vec<String>>, infos: &Infos, info_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>)) {
     for f in info_fields.unwrap_or(Vec::new()) {
-        let data_type = info_to_arrow_type(&header, &f);
+        let data_type = info_to_arrow_type(&infos, &f);
         let field = OptionalField::new(&data_type, batch_size);
         info_builders.0.push(f);
         info_builders.1.push(data_type);
