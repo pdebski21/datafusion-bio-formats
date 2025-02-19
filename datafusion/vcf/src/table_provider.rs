@@ -1,7 +1,9 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::ptr::null;
 use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use datafusion::arrow::array::{Array, ArrayBuilder, ArrayRef, BooleanBuilder, Float32Array, Float32Builder, Float64Builder, Int32Array, Int32Builder, Int64Builder, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::DataFusionError;
@@ -9,18 +11,23 @@ use datafusion::datasource::TableType;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::{ExecutionMode, ExecutionPlan, PlanProperties};
+use futures::executor::block_on;
+use log::debug;
+use noodles::vcf::Header;
+use noodles::vcf::header::record::value::map::info::{Number, Type};
 use rust_htslib::bcf;
 use rust_htslib::bcf::{IndexedReader, Read};
+use rust_htslib::bcf::header::TagType;
 use crate::physical_exec::VcfExec;
+use crate::storage::get_remote_vcf_reader;
 
-fn determine_schema_from_header(
+async fn determine_schema_from_header(
     file_path: &str,
-    info_fields: &[String],
-    format_fields: &[String],
+    info_fields: &Option<Vec<String>>,
+    format_fields: &Option<Vec<String>>,
 ) -> datafusion::common::Result<SchemaRef> {
-    // let mut reader = bcf::Reader::from_path(file_path)
-    //     .map_err(|e| DataFusionError::Execution(format!("Failed to open VCF: {:?}", e)))?;
-    // let header = reader.header();
+    let mut reader = get_remote_vcf_reader(file_path.to_string());
+    let header = reader.await.read_header().await?;
 
     let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
@@ -33,30 +40,15 @@ fn determine_schema_from_header(
         Field::new("filter", DataType::Utf8, true),
     ];
 
-    // for tag in info_fields {
-    //     let dtype = match header.info_type(tag.as_bytes()) {
-    //         Ok((t, _)) => match t {
-    //             bcf::header::TagType::Flag => DataType::Boolean,
-    //             bcf::header::TagType::Integer => DataType::Int32,
-    //             bcf::header::TagType::Float => DataType::Float64,
-    //             bcf::header::TagType::String => DataType::Utf8,
-    //         },
-    //         Err(_) => DataType::Utf8,
-    //     };
-    //     fields.push(Field::new(tag, dtype, true));
-    // }
-    // for tag in format_fields {
-    //     let dtype = match header.format_type(tag.as_bytes()) {
-    //         Ok((t, _)) => match t {
-    //             bcf::header::TagType::Flag => DataType::Boolean,
-    //             bcf::header::TagType::Integer => DataType::Int32,
-    //             bcf::header::TagType::Float => DataType::Float64,
-    //             bcf::header::TagType::String => DataType::Utf8,
-    //         },
-    //         Err(_) => DataType::Utf8,
-    //     };
-    //     fields.push(Field::new(tag, dtype, true));
-    // }
+    match info_fields   {
+        Some(infos) => {
+            for tag in infos {
+                let dtype = info_to_arrow_type(&header, tag);
+                fields.push(Field::new(tag.to_lowercase(), dtype, true));
+            }
+        }
+        _ => {}
+    }
     let schema = Schema::new(fields);
     // println!("Schema: {:?}", schema);
     Ok(Arc::new(schema))
@@ -65,8 +57,8 @@ fn determine_schema_from_header(
 #[derive(Clone, Debug)]
 pub struct VcfTableProvider {
     file_path: String,
-    info_fields: Vec<String>,
-    format_fields: Vec<String>,
+    info_fields: Option<Vec<String>>,
+    format_fields: Option<Vec<String>>,
     schema: SchemaRef,
     thread_num: Option<usize>,
 }
@@ -74,11 +66,11 @@ pub struct VcfTableProvider {
 impl VcfTableProvider {
     pub fn new(
         file_path: String,
-        info_fields: Vec<String>,
-        format_fields: Vec<String>,
+        info_fields: Option<Vec<String>>,
+        format_fields: Option<Vec<String>>,
         thread_num: Option<usize>,
     ) -> datafusion::common::Result<Self> {
-        let schema = determine_schema_from_header(&file_path, &info_fields, &format_fields)?;
+        let schema = block_on(determine_schema_from_header(&file_path, &info_fields, &format_fields)).unwrap();
         Ok(Self {
             file_path,
             info_fields,
@@ -120,3 +112,141 @@ impl TableProvider for VcfTableProvider {
         }))
     }
 }
+
+
+pub fn info_to_arrow_type(header: &Header, field: &str) ->DataType {
+    match header.infos().get(field) {
+        Some(t) => {
+            let inner = match t.ty() {
+                Type::Integer => DataType::Int32,
+                Type::String | Type::Character => DataType::Utf8,
+                Type::Float => DataType::Float32,
+                _ => panic!("Unsupported tag type"),
+            };
+            match t.number() {
+                Number::Count(1) => inner,
+                _ => DataType::new_list(inner, true),
+            }
+        },
+        None => panic!("Tag not found in header"),
+    }
+}
+#[derive(Debug)]
+pub enum OptionalField {
+    Int32Builder(Int32Builder),
+    ArrayInt32Builder(ListBuilder<Int32Builder>),
+    Float32Builder(Float32Builder),
+    ArrayFloat32Builder(ListBuilder<Float32Builder>),
+    // BooleanBuilder(BooleanBuilder),
+    Utf8Builder(StringBuilder),
+    ArrayUtf8Builder(ListBuilder<StringBuilder>),
+}
+
+impl OptionalField {
+
+    pub(crate) fn new(data_type: &DataType, batch_size: usize) -> OptionalField {
+        match data_type {
+            DataType::Int32 => OptionalField::Int32Builder(Int32Builder::with_capacity(batch_size)),
+            DataType::List(f) => {
+                match f.data_type() {
+                    DataType::Int32 => OptionalField::ArrayInt32Builder(ListBuilder::with_capacity(Int32Builder::new(), batch_size)),
+                    DataType::Float32 => OptionalField::ArrayFloat32Builder(ListBuilder::with_capacity(Float32Builder::new(), batch_size)),
+                    DataType::Utf8 => OptionalField::ArrayUtf8Builder(ListBuilder::with_capacity(StringBuilder::new() , batch_size)),
+                    _ => panic!("Unsupported data type"),
+                }
+            },
+            DataType::Float32 => OptionalField::Float32Builder(Float32Builder::new()),
+            DataType::Utf8 => OptionalField::Utf8Builder(StringBuilder::new()),
+            _ => panic!("Unsupported data type"),
+        }
+    }
+    pub fn append_int(&mut self, value: i32) {
+        match self {
+            OptionalField::Int32Builder(builder) => builder.append_value(value),
+            _ => panic!("Unsupported data type"),
+        }
+    }
+
+    pub fn append_array_int(&mut self, value: Vec<i32>) {
+        match self {
+            OptionalField::ArrayInt32Builder(builder) => {
+                let a = Int32Array::from(value);
+                builder.values().append_slice(a.values());
+                builder.append(true);
+            },
+            _ => panic!("Unsupported data type"),
+        }
+    }
+    fn append_float(&mut self, value: f32) {
+        match self {
+            OptionalField::Float32Builder(builder) => builder.append_value(value),
+
+            _ => panic!("Unsupported data type"),
+        }
+    }
+    fn append_array_float(&mut self, value: Vec<f32>) {
+        match self {
+            OptionalField::ArrayFloat32Builder(builder) => {
+                let a = Float32Array::from(value);
+                builder.values().append_slice(a.values());
+                builder.append(true);
+            },
+            _ => panic!("Unsupported data type"),
+        }
+    }
+
+    fn append_string(&mut self, value: &str) {
+        match self {
+            OptionalField::Utf8Builder(builder) => builder.append_value(value),
+            _ => panic!("Unsupported data type"),
+        }
+    }
+    fn append_array_string(&mut self, value: Vec<String>) {
+        match self {
+            OptionalField::ArrayUtf8Builder(builder) => {
+                for v in value {
+                    builder.values().append_value(&v);
+                }
+                builder.append(true);
+            },
+            _ => panic!("Unsupported data type"),
+        }
+    }
+
+
+    pub fn append_null(&mut self){
+        match self {
+            OptionalField::Int32Builder(builder) => builder.append_null(),
+            OptionalField::ArrayInt32Builder(builder) => builder.append_null(),
+            OptionalField::Utf8Builder(builder) => builder.append_null(),
+            OptionalField::ArrayUtf8Builder(builder) => builder.append_null(),
+            OptionalField::Float32Builder(builder) => builder.append_null(),
+            OptionalField::ArrayFloat32Builder(builder) => builder.append_null(),
+
+        }
+    }
+    pub fn finish(&mut self) -> ArrayRef {
+        match self {
+            OptionalField::Int32Builder(builder) => Arc::new(builder.finish()),
+            OptionalField::ArrayInt32Builder(builder) => Arc::new(builder.finish()),
+            OptionalField::Utf8Builder(builder) => Arc::new(builder.finish()),
+            OptionalField::ArrayUtf8Builder(builder) => Arc::new(builder.finish()),
+            OptionalField::Float32Builder(builder) => Arc::new(builder.finish()),
+            OptionalField::ArrayFloat32Builder(builder) => Arc::new(builder.finish()),
+        }
+    }
+
+    // pub fn clear(&mut self, batch_size: usize) {
+    //     match self {
+    //         OptionalField::Int32Builder(builder) => builder = Int32Builder::with_capacity(batch_size),
+    //         OptionalField::ArrayInt32Builder(builder) => builder.clear(),
+    //         OptionalField::Utf8Builder(builder) => builder.clear(),
+    //         OptionalField::ArrayUtf8Builder(builder) => builder.clear(),
+    //         OptionalField::Float32Builder(builder) => builder.clear(),
+    //         OptionalField::ArrayFloat32Builder(builder) => builder.clear(),
+    //     }
+    // }
+
+}
+
+

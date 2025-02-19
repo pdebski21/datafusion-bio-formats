@@ -1,4 +1,4 @@
-use noodles::bgzf;
+use noodles::{bgzf, vcf};
 use noodles_bgzf::AsyncReader;
 use opendal::{FuturesBytesStream, Operator};
 use opendal::layers::LoggingLayer;
@@ -130,6 +130,12 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
 
         _ => panic!("Invalid object storage type"),
     }
+}
+
+pub async fn get_remote_vcf_reader(file_path: String) -> vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>> {
+    let inner = get_remote_stream_bgzf(file_path.clone()).await.unwrap();
+    let mut reader = vcf::r#async::io::Reader::new(inner);
+    reader
 }
 
 
