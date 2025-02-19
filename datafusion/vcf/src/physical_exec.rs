@@ -12,19 +12,23 @@ use futures::{stream, StreamExt, TryStreamExt};
 use std::{str};
 use std::fs::File;
 use std::hash::Hasher;
+use std::io::Error;
 use std::num::NonZero;
 use std::ops::Deref;
 use async_stream::__private::AsyncStream;
 use async_stream::try_stream;
 use datafusion::arrow::ipc::FieldBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use env_logger::builder;
 use log::{debug, info};
 use noodles::vcf;
+use noodles::vcf::Header;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
+use noodles::vcf::io::Reader;
 use noodles::vcf::variant::Record;
 use noodles::vcf::variant::record::info::field::{Value,value::Array as ValueArray};
-
-use crate::storage::{get_remote_stream_bgzf, get_remote_vcf_reader, get_storage_type, StorageType};
+use noodles_bgzf::MultithreadedReader;
+use crate::storage::{get_local_vcf_reader, get_remote_stream_bgzf, get_remote_vcf_reader, get_storage_type, StorageType};
 use crate::table_provider::{info_to_arrow_type, OptionalField};
 
 fn build_record_batch(
@@ -59,7 +63,72 @@ fn build_record_batch(
 
 
 
-async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usize, thread_num: Option<usize>)  -> datafusion::error::Result<impl futures::Stream<Item = datafusion::error::Result<RecordBatch>>> {
+fn load_infos (record: Box<dyn Record>, header: &Header, info_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>)) {
+    for i in 0..info_builders.2.len() {
+        let name = &info_builders.0[i];
+        let data_type = &info_builders.1[i];
+        let builder = &mut info_builders.2[i];
+        let info = record.info();
+        let value = info.get(&header, name);
+
+        match value {
+            Some(Ok(v)) => {
+                match v {
+                    Some(Value::Integer(v)) => {
+                        builder.append_int(v);
+                    },
+                    Some(Value::Array(ValueArray::Integer(values))) => {
+                        builder.append_array_int(values.iter().map(|v| v.unwrap().unwrap()).collect());
+                    }
+                    Some(Value::Array(ValueArray::Float(values))) => {
+                        builder.append_array_float(values.iter().map(|v| v.unwrap().unwrap()).collect());
+                    }
+
+                    Some(Value::Float(v)) => {
+                        builder.append_float(v);
+
+                    }
+                    Some(Value::String(v)) => {
+                        builder.append_string(&v);
+                    }
+                    Some(Value::Array(ValueArray::String(values))) => {
+                        builder.append_array_string(values.iter().map(|v| v.unwrap().unwrap().to_string()).collect());
+                    }
+                    Some(Value::Flag) => {
+                        builder.append_boolean(true);
+                    }
+                    None => {
+                        if data_type == &DataType::Boolean {
+                            builder.append_boolean(false);
+                        } else {
+                            builder.append_null();
+                        }
+                    },
+                    _ => panic!("Unsupported value type"),
+                }
+            }
+
+            _ => {
+
+                if data_type == &DataType::Boolean {
+                    builder.append_boolean(false);
+                } else {
+                    builder.append_null();
+                }
+            }
+        }
+
+
+    }
+
+}
+
+fn builders_to_arrays(builders: &mut Vec<OptionalField>) -> Vec<Arc<dyn Array>> {
+    builders.iter_mut().map(|f| f.finish()).collect::<Vec<Arc<dyn Array>>>()
+}
+
+
+async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usize, thread_num: Option<usize>, info_fields: Option<Vec<String>>)  -> datafusion::error::Result<impl futures::Stream<Item = datafusion::error::Result<RecordBatch>>> {
     let mut chroms: Vec<String> = Vec::with_capacity(batch_size);
     let mut poss: Vec<u32> = Vec::with_capacity(batch_size);
     let mut pose: Vec<u32> = Vec::with_capacity(batch_size);
@@ -68,6 +137,7 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
     let mut alts: Vec<String> = Vec::with_capacity(batch_size);
     let mut quals: Vec<f64> = Vec::with_capacity(batch_size);
     let mut filters: Vec<String> = Vec::with_capacity(batch_size);
+
     // let infos: Vec<Vec<FieldBuilder>> = Vec::with_capacity(batch_size);
     let mut count: usize = 0;
     let mut record_num = 0;
@@ -75,10 +145,12 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
     let schema = Arc::clone(&schema_ref);
     let file_path = file_path.clone();
     let thread_num = thread_num.unwrap_or(1);
-    let mut reader = File::open(file_path)
-        .map(|f| noodles_bgzf::MultithreadedReader::with_worker_count(NonZero::new(thread_num).unwrap(), f))
-        .map(vcf::io::Reader::new)?;
+    let mut reader = get_local_vcf_reader(file_path, thread_num)?;
     let header = reader.read_header()?;
+
+    let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
+    set_info_builders(batch_size, info_fields, &header, &mut info_builders);
+
     let iter  = std::iter::from_fn(move || {
 
         let mut records = reader.records();
@@ -98,13 +170,14 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
             alts.push(".".to_string());
             quals.push(record.quality_score().unwrap_or(Ok(0.0)).unwrap() as f64);
             filters.push(".".to_string());
+            load_infos(Box::new(record), &header, &mut info_builders);
             count += 1;
         }
         if count == 0 {
             return None;
         }
         debug!("Batch number: {}", batch_num);
-        let batch = build_record_batch(Arc::clone(&schema), &chroms, &poss, &pose, &ids, &refs, &alts, &quals, &filters, None).unwrap();
+        let batch = build_record_batch(Arc::clone(&schema), &chroms, &poss, &pose, &ids, &refs, &alts, &quals, &filters, Some(&builders_to_arrays(&mut info_builders.2))).unwrap();
         count = 0;
         chroms.clear();
         poss.clear();
@@ -121,17 +194,12 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
 }
 
 
+
 async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size: usize, info_fields: Option<Vec<String>>) -> datafusion::error::Result<AsyncStream<datafusion::error::Result<RecordBatch>, impl Future<Output=()> + Sized>> {
     let mut reader = get_remote_vcf_reader(file_path.clone()).await;
     let header = reader.read_header().await?;
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
-    for f in info_fields.unwrap_or(Vec::new()) {
-        let data_type = info_to_arrow_type(&header, &f);
-        let field = OptionalField::new(&data_type, batch_size);
-        info_builders.0.push(f);
-        info_builders.1.push(data_type);
-        info_builders.2.push(field);
-    }
+    set_info_builders(batch_size, info_fields, &header, &mut info_builders);
 
     let stream = try_stream! {
         // Create vectors for accumulating record data.
@@ -151,6 +219,7 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
         let mut batch_num = 0;
         let mut batch_elem_num = 0;
         let mut batch_elem_none = 0;
+        let mut batch_elem_other = 0;
 
         // Process records one by one.
         let mut records = reader.records();
@@ -164,49 +233,17 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
             alts.push(".".to_string());
             quals.push(record.quality_score().unwrap_or(Ok(0.0))? as f64);
             filters.push(".".to_string());
+            load_infos(Box::new(record), &header, &mut info_builders);
             record_num += 1;
-            for i in 0..info_builders.2.len() {
-                let name = &info_builders.0[i];
-                let data_type = &info_builders.1[i];
-                let builder = &mut info_builders.2[i];
-                let info = record.info();
-                let value = info.get(&header, name);
 
-                match value {
-                    Some(Ok(v)) => {
-                        match v {
-                            Some(Value::Integer(v)) => {
-                                builder.append_int(v);
-                            },
-                            Some(Value::Array(ValueArray::Integer(values))) => {
-                                builder.append_array_int(values.iter().map(|v| v.unwrap().unwrap()).collect());
-                            }
-                            // Value::Float(v) => {
-                            //     builder.push(Some(v));
-                            // }
-                            // Value::String(v) => {
-                            //     builder.push(Some(v));
-                            // }
-                            // Value::Flag => {
-                            //     builder.push(Some(true));
-                            // }
-                            None => {
-                                builder.append_null();
-                            },
-                            _ => panic!("Unsupported value type"),
-                        }
-                    }
-                    _ => {
-
-                    }
-                }
-
-
-            }
 
 
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
+                debug!("Batch elements: {:?}", batch_elem_num);
+                debug!("Batch elements null: {:?}", batch_elem_none);
+                debug!("Batch elements other: {:?}", batch_elem_other);
+                debug!("Record number: {}", record_num);
                 let batch = build_record_batch(
                     Arc::clone(&schema.clone()),
                     &chroms,
@@ -217,7 +254,7 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
                     &alts,
                     &quals,
                     &filters,
-                    Some(&info_builders.2.iter_mut().map(|f| f.finish()).collect::<Vec<Arc<dyn Array>>>()),
+                    Some(&builders_to_arrays(&mut info_builders.2)),
                     // if infos.is_empty() { None } else { Some(&infos) },
 
                 )?;
@@ -249,7 +286,7 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
                 &alts,
                 &quals,
                 &filters,
-                Some(&info_builders.2.iter_mut().map(|f| f.finish()).collect::<Vec<Arc<dyn Array>>>())
+                Some(&builders_to_arrays(&mut info_builders.2))
                 // if infos.is_empty() { None } else { Some(&infos) },
             )?;
             yield batch;
@@ -258,6 +295,15 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
     Ok(stream)
 }
 
+fn set_info_builders(batch_size: usize, info_fields: Option<Vec<String>>, header: &Header, info_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>)) {
+    for f in info_fields.unwrap_or(Vec::new()) {
+        let data_type = info_to_arrow_type(&header, &f);
+        let field = OptionalField::new(&data_type, batch_size);
+        info_builders.0.push(f);
+        info_builders.1.push(data_type);
+        info_builders.2.push(field);
+    }
+}
 
 async fn get_stream(file_path: String, schema_ref: SchemaRef, batch_size: usize, thread_num: Option<usize>, info_fields: Option<Vec<String>>) -> datafusion::error::Result<SendableRecordBatchStream> {
     // Open the BGZF-indexed VCF using IndexedReader.
@@ -268,7 +314,7 @@ async fn get_stream(file_path: String, schema_ref: SchemaRef, batch_size: usize,
 
     match store_type {
         StorageType::LOCAL => {
-            let stream = get_local_vcf(file_path.clone(), schema.clone(), batch_size, thread_num).await?;
+            let stream = get_local_vcf(file_path.clone(), schema.clone(), batch_size, thread_num, info_fields).await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         },
         StorageType::GCS => {

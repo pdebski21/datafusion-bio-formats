@@ -19,15 +19,19 @@ use rust_htslib::bcf;
 use rust_htslib::bcf::{IndexedReader, Read};
 use rust_htslib::bcf::header::TagType;
 use crate::physical_exec::VcfExec;
-use crate::storage::get_remote_vcf_reader;
+use crate::storage::{get_local_vcf_reader, get_remote_vcf_reader, get_storage_type, StorageType};
 
 async fn determine_schema_from_header(
     file_path: &str,
     info_fields: &Option<Vec<String>>,
     format_fields: &Option<Vec<String>>,
 ) -> datafusion::common::Result<SchemaRef> {
-    let mut reader = get_remote_vcf_reader(file_path.to_string());
-    let header = reader.await.read_header().await?;
+
+    let storage_type = get_storage_type(file_path.to_string());
+    let header = match storage_type {
+        StorageType::LOCAL =>  get_local_vcf_reader(file_path.to_string(), 1)?.read_header()?,
+        _ => get_remote_vcf_reader(file_path.to_string()).await.read_header().await?
+    };
 
     let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
@@ -121,10 +125,11 @@ pub fn info_to_arrow_type(header: &Header, field: &str) ->DataType {
                 Type::Integer => DataType::Int32,
                 Type::String | Type::Character => DataType::Utf8,
                 Type::Float => DataType::Float32,
+                Type::Flag => DataType::Boolean,
                 _ => panic!("Unsupported tag type"),
             };
             match t.number() {
-                Number::Count(1) => inner,
+                Number::Count(1) | Number::Count(0) => inner,
                 _ => DataType::new_list(inner, true),
             }
         },
@@ -137,7 +142,8 @@ pub enum OptionalField {
     ArrayInt32Builder(ListBuilder<Int32Builder>),
     Float32Builder(Float32Builder),
     ArrayFloat32Builder(ListBuilder<Float32Builder>),
-    // BooleanBuilder(BooleanBuilder),
+    BooleanBuilder(BooleanBuilder),
+    ArrayBooleanBuilder(ListBuilder<BooleanBuilder>),
     Utf8Builder(StringBuilder),
     ArrayUtf8Builder(ListBuilder<StringBuilder>),
 }
@@ -152,17 +158,26 @@ impl OptionalField {
                     DataType::Int32 => OptionalField::ArrayInt32Builder(ListBuilder::with_capacity(Int32Builder::new(), batch_size)),
                     DataType::Float32 => OptionalField::ArrayFloat32Builder(ListBuilder::with_capacity(Float32Builder::new(), batch_size)),
                     DataType::Utf8 => OptionalField::ArrayUtf8Builder(ListBuilder::with_capacity(StringBuilder::new() , batch_size)),
+                    DataType::Boolean => OptionalField::ArrayBooleanBuilder(ListBuilder::with_capacity(BooleanBuilder::new(), batch_size)),
                     _ => panic!("Unsupported data type"),
                 }
             },
             DataType::Float32 => OptionalField::Float32Builder(Float32Builder::new()),
             DataType::Utf8 => OptionalField::Utf8Builder(StringBuilder::new()),
+            DataType::Boolean => OptionalField::BooleanBuilder(BooleanBuilder::with_capacity(batch_size)),
             _ => panic!("Unsupported data type"),
         }
     }
     pub fn append_int(&mut self, value: i32) {
         match self {
             OptionalField::Int32Builder(builder) => builder.append_value(value),
+            _ => panic!("Unsupported data type"),
+        }
+    }
+
+    pub fn append_boolean(&mut self, value: bool) {
+        match self {
+            OptionalField::BooleanBuilder(builder) => builder.append_value(value),
             _ => panic!("Unsupported data type"),
         }
     }
@@ -177,14 +192,14 @@ impl OptionalField {
             _ => panic!("Unsupported data type"),
         }
     }
-    fn append_float(&mut self, value: f32) {
+    pub fn append_float(&mut self, value: f32) {
         match self {
             OptionalField::Float32Builder(builder) => builder.append_value(value),
 
             _ => panic!("Unsupported data type"),
         }
     }
-    fn append_array_float(&mut self, value: Vec<f32>) {
+    pub fn append_array_float(&mut self, value: Vec<f32>) {
         match self {
             OptionalField::ArrayFloat32Builder(builder) => {
                 let a = Float32Array::from(value);
@@ -195,13 +210,13 @@ impl OptionalField {
         }
     }
 
-    fn append_string(&mut self, value: &str) {
+    pub fn append_string(&mut self, value: &str) {
         match self {
             OptionalField::Utf8Builder(builder) => builder.append_value(value),
             _ => panic!("Unsupported data type"),
         }
     }
-    fn append_array_string(&mut self, value: Vec<String>) {
+    pub fn append_array_string(&mut self, value: Vec<String>) {
         match self {
             OptionalField::ArrayUtf8Builder(builder) => {
                 for v in value {
@@ -222,6 +237,8 @@ impl OptionalField {
             OptionalField::ArrayUtf8Builder(builder) => builder.append_null(),
             OptionalField::Float32Builder(builder) => builder.append_null(),
             OptionalField::ArrayFloat32Builder(builder) => builder.append_null(),
+            OptionalField::BooleanBuilder(builder) => builder.append_null(),
+            OptionalField::ArrayBooleanBuilder(builder) => builder.append_null(),
 
         }
     }
@@ -233,19 +250,10 @@ impl OptionalField {
             OptionalField::ArrayUtf8Builder(builder) => Arc::new(builder.finish()),
             OptionalField::Float32Builder(builder) => Arc::new(builder.finish()),
             OptionalField::ArrayFloat32Builder(builder) => Arc::new(builder.finish()),
+            OptionalField::BooleanBuilder(builder) => Arc::new(builder.finish()),
+            OptionalField::ArrayBooleanBuilder(builder) => Arc::new(builder.finish()),
         }
     }
-
-    // pub fn clear(&mut self, batch_size: usize) {
-    //     match self {
-    //         OptionalField::Int32Builder(builder) => builder = Int32Builder::with_capacity(batch_size),
-    //         OptionalField::ArrayInt32Builder(builder) => builder.clear(),
-    //         OptionalField::Utf8Builder(builder) => builder.clear(),
-    //         OptionalField::ArrayUtf8Builder(builder) => builder.clear(),
-    //         OptionalField::Float32Builder(builder) => builder.clear(),
-    //         OptionalField::ArrayFloat32Builder(builder) => builder.clear(),
-    //     }
-    // }
 
 }
 
