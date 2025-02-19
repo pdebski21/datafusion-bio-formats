@@ -14,6 +14,7 @@ use datafusion::physical_plan::{ExecutionMode, ExecutionPlan, PlanProperties};
 use futures::executor::block_on;
 use log::debug;
 use noodles::vcf::Header;
+use noodles::vcf::header::Infos;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use rust_htslib::bcf;
 use rust_htslib::bcf::{IndexedReader, Read};
@@ -32,6 +33,7 @@ async fn determine_schema_from_header(
         StorageType::LOCAL =>  get_local_vcf_reader(file_path.to_string(), 1)?.read_header()?,
         _ => get_remote_vcf_reader(file_path.to_string()).await.read_header().await?
     };
+    let header_infos = header.infos();
 
     let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
@@ -47,7 +49,7 @@ async fn determine_schema_from_header(
     match info_fields   {
         Some(infos) => {
             for tag in infos {
-                let dtype = info_to_arrow_type(&header, tag);
+                let dtype = info_to_arrow_type(&header_infos, tag);
                 fields.push(Field::new(tag.to_lowercase(), dtype, true));
             }
         }
@@ -118,8 +120,8 @@ impl TableProvider for VcfTableProvider {
 }
 
 
-pub fn info_to_arrow_type(header: &Header, field: &str) ->DataType {
-    match header.infos().get(field) {
+pub fn info_to_arrow_type(infos: &Infos, field: &str) ->DataType {
+    match infos.get(field) {
         Some(t) => {
             let inner = match t.ty() {
                 Type::Integer => DataType::Int32,
