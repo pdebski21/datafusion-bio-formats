@@ -165,8 +165,8 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
             let record = record.unwrap().unwrap();
             // For each record, fill the fixed columns.
             chroms.push(record.reference_sequence_name().to_string());
-            poss.push(record.variant_start().unwrap().unwrap().get() as u32 + 1);
-            pose.push(record.variant_end(&header).unwrap().get() as u32 + 1);
+            poss.push(record.variant_start().unwrap().unwrap().get() as u32);
+            pose.push(record.variant_end(&header).unwrap().get() as u32);
             ids.push(".".to_string());
             refs.push(record.reference_bases().to_string());
             alts.push(".".to_string());
@@ -227,8 +227,8 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
         while let Some(result) = records.next().await {
             let record = result?;  // propagate errors if any
             chroms.push(record.reference_sequence_name().to_string());
-            poss.push(record.variant_start().unwrap()?.get() as u32 + 1);
-            pose.push(record.variant_end(&header)?.get() as u32 + 1);
+            poss.push(record.variant_start().unwrap()?.get() as u32);
+            pose.push(record.variant_end(&header)?.get() as u32);
             ids.push(".".to_string());
             refs.push(record.reference_bases().to_string());
             alts.push(".".to_string());
