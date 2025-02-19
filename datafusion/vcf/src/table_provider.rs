@@ -16,9 +16,6 @@ use log::debug;
 use noodles::vcf::Header;
 use noodles::vcf::header::Infos;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
-use rust_htslib::bcf;
-use rust_htslib::bcf::{IndexedReader, Read};
-use rust_htslib::bcf::header::TagType;
 use crate::physical_exec::VcfExec;
 use crate::storage::{get_local_vcf_reader, get_remote_vcf_reader, get_storage_type, StorageType};
 
