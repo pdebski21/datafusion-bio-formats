@@ -6,16 +6,13 @@ edition = "2024"
 [dependencies]
 datafusion.workspace = true
 datafusion-execution.workspace = true
-rust-htslib.workspace = true
 async-trait.workspace = true
 
-futures-core = "0.3.31"
 futures = "0.3.31"
-#exon = "0.32.4"
+
 noodles = { version = "0.91.0",  features = ["bam", "sam", "vcf", "bgzf", "async"] }
 noodles-bgzf = { version = "0.36.0" ,features = ["libdeflate"] }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "rt", "macros"] }
-url = "2.5.4"
 object_store = {version = "0.11.2", features = ["gcp"] }
 tokio-util = {  version="0.7.13", features =["io-util"] }
 bytes = "1.10.0"
