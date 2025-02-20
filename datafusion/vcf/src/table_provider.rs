@@ -34,8 +34,8 @@ async fn determine_schema_from_header(
 
     let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
-        Field::new("pos_start", DataType::UInt32, false),
-        Field::new("pos_end",DataType::UInt32, false),
+        Field::new("start", DataType::UInt32, false),
+        Field::new("end",DataType::UInt32, false),
         Field::new("id", DataType::Utf8, true),
         Field::new("ref", DataType::Utf8, false),
         Field::new("alt", DataType::Utf8, false),
