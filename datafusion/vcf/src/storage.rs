@@ -6,7 +6,7 @@ use noodles::{bgzf, vcf};
 use noodles::vcf::io::Reader;
 use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
-use opendal::layers::{LoggingLayer, RetryLayer};
+use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::Gcs;
 use tokio_util::io::StreamReader;
 
@@ -128,7 +128,8 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
                 .disable_vm_metadata()
                 .allow_anonymous();
             let operator =  Operator::new(builder)?
-                .layer(RetryLayer::new().with_max_times(3).with_jitter())
+                .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
+                .layer(RetryLayer::new().with_max_times(3))
                 .layer(LoggingLayer::default())
                 .finish();
             operator.reader_with(file_path.as_str()).await?.into_bytes_stream(..).await
