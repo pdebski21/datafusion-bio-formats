@@ -7,7 +7,7 @@ use noodles::vcf::io::Reader;
 use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
-use opendal::services::Gcs;
+use opendal::services::{Gcs, S3};
 use tokio_util::io::StreamReader;
 
 
@@ -128,9 +128,22 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
                 .disable_vm_metadata()
                 .allow_anonymous();
             let operator =  Operator::new(builder)?
-                // .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
-                // .layer(RetryLayer::new().with_max_times(3))
-                // .layer(LoggingLayer::default())
+                .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
+                .layer(RetryLayer::new().with_max_times(3))
+                .layer(LoggingLayer::default())
+                .finish();
+            operator.reader_with(file_path.as_str()).concurrent(1).await?.into_bytes_stream(..).await
+        }
+        StorageType::S3 => {
+            let builder = S3::default()
+                .region(&S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str()).await.unwrap())
+                .bucket(bucket_name.as_str())
+                .disable_ec2_metadata()
+                .allow_anonymous();
+            let operator =  Operator::new(builder)?
+                .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
+                .layer(RetryLayer::new().with_max_times(3))
+                .layer(LoggingLayer::default())
                 .finish();
             operator.reader_with(file_path.as_str()).concurrent(1).await?.into_bytes_stream(..).await
         }

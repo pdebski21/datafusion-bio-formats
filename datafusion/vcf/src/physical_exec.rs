@@ -315,7 +315,7 @@ async fn get_stream(file_path: String, schema_ref: SchemaRef, batch_size: usize,
             let stream = get_local_vcf(file_path.clone(), schema.clone(), batch_size, thread_num, info_fields).await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         },
-        StorageType::GCS => {
+        StorageType::GCS | StorageType::S3=> {
             let stream = get_remote_vcf_stream(file_path.clone(), schema.clone(), batch_size, info_fields).await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         },
