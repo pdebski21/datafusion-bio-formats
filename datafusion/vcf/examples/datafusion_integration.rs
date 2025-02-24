@@ -7,11 +7,12 @@ async fn main() -> datafusion::error::Result<()> {
     env_logger::init();
     // let path = "gs://gcp-public-data--gnomad/release/4.1/vcf/exomes/gnomad.exomes.v4.1.sites.chr21.vcf.bgz".to_string();
     // let path = "gs://gcp-public-data--gnomad/release/4.1/genome_sv/gnomad.v4.1.sv.sites.vcf.gz".to_string();
-    let path ="/tmp/gnomad.v4.1.sv.sites.vcf.gz".to_string();
+    let path ="/tmp/gnomad.exomes.v4.1.sites.chrX.vcf.gz".to_string();
+    // let path ="/tmp/gnomad.v4.1.sv.sites.vcf.gz".to_string();
     // let infos  = Some(Vec::from(["AC".to_string(), "AF".to_string(), "AN".to_string(), "FS".to_string(), "AN_raw".to_string(), "variant_type".to_string(), "AS_culprit".to_string(), "only_het".to_string()]));
-    let infos  = Some(Vec::from(["SVTYPE".to_string()]));
+    // let infos  = Some(Vec::from(["SVTYPE".to_string()]));
     // let infos  = Some(Vec::from(["AF".to_string()]));
-    // let infos  = None;
+    let infos  = None;
     // Create a new context with the default configuration
     let ctx = SessionContext::new();
     ctx.sql("set datafusion.execution.skip_physical_aggregate_schema_check=true").await?;
