@@ -128,11 +128,11 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
                 .disable_vm_metadata()
                 .allow_anonymous();
             let operator =  Operator::new(builder)?
-                .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
-                .layer(RetryLayer::new().with_max_times(3))
-                .layer(LoggingLayer::default())
+                // .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
+                // .layer(RetryLayer::new().with_max_times(3))
+                // .layer(LoggingLayer::default())
                 .finish();
-            operator.reader_with(file_path.as_str()).await?.into_bytes_stream(..).await
+            operator.reader_with(file_path.as_str()).concurrent(1).await?.into_bytes_stream(..).await
         }
 
         _ => panic!("Invalid object storage type"),
