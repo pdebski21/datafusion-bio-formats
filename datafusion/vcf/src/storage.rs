@@ -1,11 +1,12 @@
 use std::fs::File;
 use std::io::Error;
 use std::num::NonZero;
+use log::debug;
 use noodles::{bgzf, vcf};
 use noodles::vcf::io::Reader;
 use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
-use opendal::layers::LoggingLayer;
+use opendal::layers::{LoggingLayer, RetryLayer};
 use opendal::services::Gcs;
 use tokio_util::io::StreamReader;
 
@@ -127,6 +128,7 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
                 .disable_vm_metadata()
                 .allow_anonymous();
             let operator =  Operator::new(builder)?
+                .layer(RetryLayer::new().with_max_times(3).with_jitter())
                 .layer(LoggingLayer::default())
                 .finish();
             operator.reader_with(file_path.as_str()).await?.into_bytes_stream(..).await
@@ -144,6 +146,7 @@ pub async fn get_remote_vcf_reader(file_path: String) -> vcf::r#async::io::Reade
 
 
 pub fn get_local_vcf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
+    debug!("Reading VCF file from local storage with {} threads", thread_num);
     File::open(file_path)
         .map(|f| noodles_bgzf::MultithreadedReader::with_worker_count(NonZero::new(thread_num).unwrap(), f))
         .map(vcf::io::Reader::new)
