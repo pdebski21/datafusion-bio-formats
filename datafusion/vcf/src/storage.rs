@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Error;
 use std::num::NonZero;
+use std::sync::Arc;
 use log::debug;
 use noodles::{bgzf, vcf};
 use noodles::vcf::io::Reader;
