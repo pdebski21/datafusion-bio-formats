@@ -9,12 +9,13 @@ use datafusion::common::DataFusionError;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{stream, StreamExt, TryStreamExt};
-use std::{str};
+use std::{io, str};
 use std::fs::File;
 use std::hash::Hasher;
 use std::io::Error;
 use std::num::NonZero;
 use std::ops::Deref;
+use std::time::Instant;
 use async_stream::__private::AsyncStream;
 use async_stream::try_stream;
 use datafusion::arrow::ipc::FieldBuilder;
@@ -28,7 +29,8 @@ use noodles::vcf::header::record::value::map::Info;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use noodles::vcf::io::Reader;
 use noodles::vcf::variant::Record;
-use noodles::vcf::variant::record::info::field::{Value,value::Array as ValueArray};
+use noodles::vcf::variant::record::{AlternateBases, Filters, Ids};
+use noodles::vcf::variant::record::info::field::{Value, value::Array as ValueArray};
 use noodles_bgzf::MultithreadedReader;
 use crate::storage::{get_local_vcf_reader, get_remote_stream_bgzf, get_remote_vcf_reader, get_storage_type, StorageType};
 use crate::table_provider::{info_to_arrow_type, OptionalField};
@@ -156,6 +158,7 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
     let iter  = std::iter::from_fn(move || {
 
         let mut records = reader.records();
+        let iter_start_time = Instant::now();
         while count < batch_size {
             let record = records.next();
             record_num += 1;
@@ -167,19 +170,24 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
             chroms.push(record.reference_sequence_name().to_string());
             poss.push(record.variant_start().unwrap().unwrap().get() as u32);
             pose.push(record.variant_end(&header).unwrap().get() as u32);
-            ids.push(".".to_string());
+            ids.push(record.ids().iter().map(|v| v.to_string()).collect::<Vec<String>>().join(";"));
             refs.push(record.reference_bases().to_string());
-            alts.push(".".to_string());
+            alts.push(record.alternate_bases().iter().map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join("|"));
             quals.push(record.quality_score().unwrap_or(Ok(0.0)).unwrap() as f64);
-            filters.push(".".to_string());
+            filters.push(record.filters().iter(&header).map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join(";"));
             load_infos(Box::new(record), &header, &mut info_builders);
             count += 1;
         }
         if count == 0 {
             return None;
         }
+        let duration = iter_start_time.elapsed();
+        debug!("Time elapsed in iterating records: {:?}", duration);
         debug!("Batch number: {}", batch_num);
+        let start_time = Instant::now();
         let batch = build_record_batch(Arc::clone(&schema), &chroms, &poss, &pose, &ids, &refs, &alts, &quals, &filters, Some(&builders_to_arrays(&mut info_builders.2))).unwrap();
+        let duration = start_time.elapsed();
+        debug!("Time elapsed in building batch: {:?}", duration);
         count = 0;
         chroms.clear();
         poss.clear();
@@ -227,13 +235,13 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
         while let Some(result) = records.next().await {
             let record = result?;  // propagate errors if any
             chroms.push(record.reference_sequence_name().to_string());
-            poss.push(record.variant_start().unwrap()?.get() as u32);
-            pose.push(record.variant_end(&header)?.get() as u32);
-            ids.push(".".to_string());
+            poss.push(record.variant_start().unwrap().unwrap().get() as u32);
+            pose.push(record.variant_end(&header).unwrap().get() as u32);
+            ids.push(record.ids().iter().map(|v| v.to_string()).collect::<Vec<String>>().join(";"));
             refs.push(record.reference_bases().to_string());
-            alts.push(".".to_string());
-            quals.push(record.quality_score().unwrap_or(Ok(0.0))? as f64);
-            filters.push(".".to_string());
+            alts.push(record.alternate_bases().iter().map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join("|"));
+            quals.push(record.quality_score().unwrap_or(Ok(0.0)).unwrap() as f64);
+            filters.push(record.filters().iter(&header).map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join(";"));
             load_infos(Box::new(record), &header, &mut info_builders);
             record_num += 1;
 
