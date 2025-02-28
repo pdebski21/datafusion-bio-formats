@@ -7,12 +7,6 @@ use noodles::{bgzf, vcf};
 use noodles::vcf::io::Reader;
 use noodles_bgzf::MultithreadedReader;
 
-pub fn get_local_vcf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
-    debug!("Reading VCF file from local storage with {} threads", thread_num);
-    File::open(file_path)
-        .map(|f| noodles_bgzf::MultithreadedReader::with_worker_count(NonZero::new(thread_num).unwrap(), f))
-        .map(vcf::io::Reader::new)
-}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> datafusion::error::Result<()> {

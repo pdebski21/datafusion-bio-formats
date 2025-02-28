@@ -1,14 +1,20 @@
 use std::fs::File;
+use std::io;
 use std::io::Error;
 use std::num::NonZero;
 use std::sync::Arc;
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
+use futures::stream::BoxStream;
 use log::debug;
 use noodles::{bgzf, vcf};
 use noodles::vcf::io::Reader;
+use noodles::vcf::Record;
 use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::{Gcs, S3};
+use tokio::io::{AsyncRead, BufReader};
 use tokio_util::io::StreamReader;
 
 
@@ -28,7 +34,7 @@ impl CompressionType {
     }
 
     fn from_string(compression_type: String) -> Self {
-        match compression_type.as_str() {
+        match compression_type.to_lowercase().as_str() {
             "gz" => CompressionType::GZIP,
             "bgz" => CompressionType::BGZF,
             "none" => CompressionType::NONE,
@@ -79,6 +85,9 @@ fn get_file_path(file_path: String) -> String {
 
 pub fn get_compression_type(file_path: String) -> CompressionType {
     //extract the file extension from path
+    if file_path.to_lowercase().ends_with(".vcf") {
+        return CompressionType::NONE;
+    }
     let file_extension = file_path.split('.').last().unwrap();
     //return the compression type
     CompressionType::from_string(file_extension.to_string())
@@ -153,14 +162,22 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
     }
 }
 
-pub async fn get_remote_vcf_reader(file_path: String) -> vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>> {
+pub async fn get_remote_vcf_bgzf_reader(file_path: String) -> vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>> {
     let inner = get_remote_stream_bgzf(file_path.clone()).await.unwrap();
     let mut reader = vcf::r#async::io::Reader::new(inner);
     reader
 }
 
+pub async fn get_remote_vcf_reader(file_path: String) -> vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>> {
+    let inner = StreamReader::new(get_remote_stream(file_path.clone()).await.unwrap());
+    let mut reader = vcf::r#async::io::Reader::new(inner);
+    reader
+}
 
-pub fn get_local_vcf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
+
+
+
+pub fn get_local_vcf_bgzf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
     debug!("Reading VCF file from local storage with {} threads", thread_num);
     File::open(file_path)
         .map(|f| noodles_bgzf::MultithreadedReader::with_worker_count(NonZero::new(thread_num).unwrap(), f))
@@ -168,5 +185,85 @@ pub fn get_local_vcf_reader(file_path: String, thread_num: usize) -> Result<Read
 }
 
 
+pub async fn get_local_vcf_reader(file_path: String) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
+    debug!("Reading VCF file from local storage with async reader");
+    let reader = tokio::fs::File::open("sample.vcf")
+        .await
+        .map(BufReader::new)
+        .map(vcf::r#async::io::Reader::new)?;
+    Ok(reader)
+}
 
+
+pub async fn get_local_vcf_header(file_path: String, thread_num: usize) -> Result<vcf::Header, Error> {
+    let compression_type = get_compression_type(file_path.clone());
+    let header = match compression_type {
+        CompressionType::BGZF | CompressionType::GZIP=> {
+            let mut reader = get_local_vcf_bgzf_reader(file_path, thread_num)?;
+            reader.read_header()?
+        }
+        CompressionType::NONE => {
+            let mut reader = get_local_vcf_reader(file_path).await?;
+            reader.read_header().await?
+        }
+    };
+    Ok(header)
+}
+
+pub async fn get_remote_vcf_header(file_path: String) -> Result<vcf::Header, Error> {
+    let compression_type = get_compression_type(file_path.clone());
+    let header = match compression_type {
+        CompressionType::BGZF | CompressionType::GZIP=> {
+            let mut reader = get_remote_vcf_bgzf_reader(file_path).await;
+            reader.read_header().await?
+        }
+        CompressionType::NONE => {
+            let mut reader = get_remote_vcf_reader(file_path).await;
+            reader.read_header().await?
+        }
+    };
+    Ok(header)
+}
+
+pub enum VcfRemoteReader {
+    BGZF( vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>),
+    PLAIN( vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>>)
+}
+
+impl VcfRemoteReader {
+    pub async fn new(file_path: String) -> Self {
+        let compression_type = get_compression_type(file_path.clone());
+        match compression_type {
+            CompressionType::BGZF | CompressionType::GZIP=> {
+                let reader = get_remote_vcf_bgzf_reader(file_path).await;
+                VcfRemoteReader::BGZF(reader)
+            }
+            CompressionType::NONE => {
+                let reader = get_remote_vcf_reader(file_path).await;
+                VcfRemoteReader::PLAIN(reader)
+            }
+        }
+    }
+    pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
+        match self {
+            VcfRemoteReader::BGZF(reader) => {
+                reader.read_header().await
+            }
+            VcfRemoteReader::PLAIN(reader) => {
+                reader.read_header().await
+            }
+        }
+    }
+
+    pub async fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
+        match self {
+            VcfRemoteReader::BGZF(reader) => {
+                reader.records().boxed()
+            }
+            VcfRemoteReader::PLAIN(reader) => {
+                reader.records().boxed()
+            }
+        }
+    }
+}
 
