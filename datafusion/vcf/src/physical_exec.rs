@@ -32,7 +32,7 @@ use noodles::vcf::variant::Record;
 use noodles::vcf::variant::record::{AlternateBases, Filters, Ids};
 use noodles::vcf::variant::record::info::field::{Value, value::Array as ValueArray};
 use noodles_bgzf::MultithreadedReader;
-use crate::storage::{get_local_vcf_reader, get_remote_stream_bgzf, get_remote_vcf_reader, get_storage_type, StorageType};
+use crate::storage::{get_compression_type, get_local_vcf_bgzf_reader, get_remote_stream_bgzf, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_remote_vcf_reader, get_storage_type, CompressionType, StorageType, VcfRemoteReader};
 use crate::table_provider::{info_to_arrow_type, OptionalField};
 
 fn build_record_batch(
@@ -148,7 +148,7 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
     let schema = Arc::clone(&schema_ref);
     let file_path = file_path.clone();
     let thread_num = thread_num.unwrap_or(1);
-    let mut reader = get_local_vcf_reader(file_path, thread_num)?;
+    let mut reader = get_local_vcf_bgzf_reader(file_path, thread_num)?;
     let header = reader.read_header()?;
     let infos = header.infos();
 
@@ -206,11 +206,13 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
 
 
 async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size: usize, info_fields: Option<Vec<String>>) -> datafusion::error::Result<AsyncStream<datafusion::error::Result<RecordBatch>, impl Future<Output=()> + Sized>> {
-    let mut reader = get_remote_vcf_reader(file_path.clone()).await;
+    let mut reader = VcfRemoteReader::new(file_path.clone()).await;
     let header = reader.read_header().await?;
     let infos = header.infos();
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
     set_info_builders(batch_size, info_fields, &infos, &mut info_builders);
+
+
 
     let stream = try_stream! {
         // Create vectors for accumulating record data.
@@ -231,7 +233,8 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
 
 
         // Process records one by one.
-        let mut records = reader.records();
+
+        let mut records = reader.read_records().await;
         while let Some(result) = records.next().await {
             let record = result?;  // propagate errors if any
             chroms.push(record.reference_sequence_name().to_string());
@@ -244,9 +247,6 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
             filters.push(record.filters().iter(&header).map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join(";"));
             load_infos(Box::new(record), &header, &mut info_builders);
             record_num += 1;
-
-
-
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
                 debug!("Record number: {}", record_num);

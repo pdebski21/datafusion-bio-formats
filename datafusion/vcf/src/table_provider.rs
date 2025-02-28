@@ -17,7 +17,7 @@ use noodles::vcf::Header;
 use noodles::vcf::header::Infos;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use crate::physical_exec::VcfExec;
-use crate::storage::{get_local_vcf_reader, get_remote_vcf_reader, get_storage_type, StorageType};
+use crate::storage::{get_local_vcf_bgzf_reader, get_local_vcf_header, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_storage_type, StorageType};
 
 async fn determine_schema_from_header(
     file_path: &str,
@@ -26,10 +26,7 @@ async fn determine_schema_from_header(
 ) -> datafusion::common::Result<SchemaRef> {
 
     let storage_type = get_storage_type(file_path.to_string());
-    let header = match storage_type {
-        StorageType::LOCAL =>  get_local_vcf_reader(file_path.to_string(), 1)?.read_header()?,
-        _ => get_remote_vcf_reader(file_path.to_string()).await.read_header().await?
-    };
+    let header = get_remote_vcf_header(file_path.to_string()).await?;
     let header_infos = header.infos();
 
     let mut fields = vec![
@@ -64,6 +61,7 @@ pub struct VcfTableProvider {
     format_fields: Option<Vec<String>>,
     schema: SchemaRef,
     thread_num: Option<usize>,
+
 }
 
 impl VcfTableProvider {
@@ -73,7 +71,7 @@ impl VcfTableProvider {
         format_fields: Option<Vec<String>>,
         thread_num: Option<usize>,
     ) -> datafusion::common::Result<Self> {
-        let schema = block_on(determine_schema_from_header(&file_path, &info_fields, &format_fields)).unwrap();
+        let schema = block_on(determine_schema_from_header(&file_path, &info_fields, &format_fields))?;
         Ok(Self {
             file_path,
             info_fields,
@@ -101,6 +99,7 @@ impl TableProvider for VcfTableProvider {
     }
 
     async fn scan(&self, state: &dyn Session, projection: Option<&Vec<usize>>, _filters: &[Expr], limit: Option<usize>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+
         Ok(Arc::new(VcfExec {
             cache: PlanProperties::new( EquivalenceProperties::new(self.schema.clone()),
                                         Partitioning::UnknownPartitioning(1),
