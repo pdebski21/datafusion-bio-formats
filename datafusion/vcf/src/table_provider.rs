@@ -17,7 +17,7 @@ use noodles::vcf::Header;
 use noodles::vcf::header::Infos;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use crate::physical_exec::VcfExec;
-use crate::storage::{get_local_vcf_bgzf_reader, get_local_vcf_header, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_storage_type, StorageType};
+use crate::storage::{get_header, get_local_vcf_bgzf_reader, get_local_vcf_header, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_storage_type, StorageType};
 
 async fn determine_schema_from_header(
     file_path: &str,
@@ -25,8 +25,7 @@ async fn determine_schema_from_header(
     format_fields: &Option<Vec<String>>,
 ) -> datafusion::common::Result<SchemaRef> {
 
-    let storage_type = get_storage_type(file_path.to_string());
-    let header = get_remote_vcf_header(file_path.to_string()).await?;
+    let header = get_header(file_path.to_string()).await?;
     let header_infos = header.infos();
 
     let mut fields = vec![

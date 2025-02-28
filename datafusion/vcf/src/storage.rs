@@ -225,6 +225,19 @@ pub async fn get_remote_vcf_header(file_path: String) -> Result<vcf::Header, Err
     Ok(header)
 }
 
+pub async fn get_header(file_path: String) -> Result<vcf::Header, Error> {
+    let storage_type = get_storage_type(file_path.clone());
+    let header = match storage_type {
+        StorageType::LOCAL => {
+            get_local_vcf_header(file_path, 1).await?
+        }
+        _ => {
+            get_remote_vcf_header(file_path).await?
+        }
+    };
+    Ok(header)
+}
+
 pub enum VcfRemoteReader {
     BGZF( vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>),
     PLAIN( vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>>)
