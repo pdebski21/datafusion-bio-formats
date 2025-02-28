@@ -29,7 +29,7 @@ use noodles::vcf::header::record::value::map::Info;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use noodles::vcf::io::Reader;
 use noodles::vcf::variant::Record;
-use noodles::vcf::variant::record::{AlternateBases, Filters, Ids};
+use noodles::vcf::variant::record::{AlternateBases, Filters, Ids, ReferenceBases};
 use noodles::vcf::variant::record::info::field::{Value, value::Array as ValueArray};
 use noodles_bgzf::MultithreadedReader;
 use crate::storage::{get_compression_type, get_local_vcf_bgzf_reader, get_remote_stream_bgzf, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_remote_vcf_reader, get_storage_type, CompressionType, StorageType, VcfRemoteReader};
@@ -131,6 +131,24 @@ fn builders_to_arrays(builders: &mut Vec<OptionalField>) -> Vec<Arc<dyn Array>> 
     builders.iter_mut().map(|f| f.finish()).collect::<Vec<Arc<dyn Array>>>()
 }
 
+fn get_variant_end(record: &dyn Record, header: &Header) -> u32 {
+    let ref_len = record.reference_bases().len();
+    let alt_len = record.alternate_bases().len();
+    //check if all are single base ACTG
+    if ref_len == 1 && alt_len == 1 && record.reference_bases().iter()
+        .map(|c| c.unwrap())
+        .all(|c| c== b'A' || c == b'C' || c == b'G' || c == b'T') &&
+        record.alternate_bases().iter()
+        .map(|c| c.unwrap())
+        .all(|c| c.eq("A")|| c.eq("C")  || c.eq("G")  || c.eq("T") ) {
+        record.variant_start().unwrap().unwrap().get() as u32
+    } else {
+        record.variant_end(&header).unwrap().get() as u32
+    }
+
+}
+
+
 
 async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usize, thread_num: Option<usize>, info_fields: Option<Vec<String>>)  -> datafusion::error::Result<impl futures::Stream<Item = datafusion::error::Result<RecordBatch>>> {
     let mut chroms: Vec<String> = Vec::with_capacity(batch_size);
@@ -169,7 +187,7 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef, batch_size: usi
             // For each record, fill the fixed columns.
             chroms.push(record.reference_sequence_name().to_string());
             poss.push(record.variant_start().unwrap().unwrap().get() as u32);
-            pose.push(record.variant_end(&header).unwrap().get() as u32);
+            pose.push(get_variant_end(&record, &header));
             ids.push(record.ids().iter().map(|v| v.to_string()).collect::<Vec<String>>().join(";"));
             refs.push(record.reference_bases().to_string());
             alts.push(record.alternate_bases().iter().map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join("|"));
@@ -238,8 +256,8 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef, batch_size:
         while let Some(result) = records.next().await {
             let record = result?;  // propagate errors if any
             chroms.push(record.reference_sequence_name().to_string());
-            poss.push(record.variant_start().unwrap().unwrap().get() as u32);
-            pose.push(record.variant_end(&header).unwrap().get() as u32);
+            poss.push(record.variant_start().unwrap()?.get() as u32);
+            pose.push(get_variant_end(&record, &header));
             ids.push(record.ids().iter().map(|v| v.to_string()).collect::<Vec<String>>().join(";"));
             refs.push(record.reference_bases().to_string());
             alts.push(record.alternate_bases().iter().map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join("|"));
