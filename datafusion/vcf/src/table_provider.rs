@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::ptr::null;
 use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
@@ -90,6 +91,7 @@ impl TableProvider for VcfTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
+        debug!("VcfTableProvider::schema");
         self.schema.clone()
     }
 
@@ -98,13 +100,36 @@ impl TableProvider for VcfTableProvider {
     }
 
     async fn scan(&self, state: &dyn Session, projection: Option<&Vec<usize>>, _filters: &[Expr], limit: Option<usize>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        debug!("VcfTableProvider::scan");
+
+        let schema = match projection {
+            Some(p) => {
+                if p.len() == 0 {
+                    Arc::new(Schema::new(vec![
+                        Field::new("dummy", DataType::Null, true),
+                    ]))
+                }
+                else {
+                    let schema_fields = self.schema.fields();
+                    let proj = projection.unwrap().clone();
+                    let mut fields: Vec<Field> = Vec::with_capacity(proj.len());
+                    for i in proj {
+                        fields.push(schema_fields[i].deref().clone());
+                    }
+                    Arc::new(Schema::new(fields))
+                }
+            },
+            None => {
+                self.schema.clone()
+            }
+        };
 
         Ok(Arc::new(VcfExec {
-            cache: PlanProperties::new( EquivalenceProperties::new(self.schema.clone()),
+            cache: PlanProperties::new( EquivalenceProperties::new(schema.clone()),
                                         Partitioning::UnknownPartitioning(1),
                                         ExecutionMode::Bounded),
             file_path: self.file_path.clone(),
-            schema: self.schema.clone(),
+            schema: schema.clone(),
             info_fields: self.info_fields.clone(),
             format_fields: self.format_fields.clone(),
             projection: projection.cloned(),
