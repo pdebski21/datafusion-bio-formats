@@ -2,37 +2,25 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, Float64Array, Int32Array, NullArray, StringArray, UInt32Array};
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::array::{Array, Float64Array, NullArray, StringArray, UInt32Array};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{stream, StreamExt, TryStreamExt};
-use std::{io, str};
-use std::fs::File;
-use std::hash::Hasher;
-use std::io::Error;
-use std::num::NonZero;
-use std::ops::Deref;
+use std::str;
 use std::time::Instant;
 use async_stream::__private::AsyncStream;
 use async_stream::try_stream;
-use datafusion::arrow::ipc::FieldBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use env_logger::builder;
-use log::{debug, info};
-use noodles::vcf;
+use log::debug;
 use noodles::vcf::Header;
 use noodles::vcf::header::Infos;
-use noodles::vcf::header::record::value::map::Info;
-use noodles::vcf::header::record::value::map::info::{Number, Type};
-use noodles::vcf::io::Reader;
 use noodles::vcf::variant::Record;
 use noodles::vcf::variant::record::{AlternateBases, Filters, Ids, ReferenceBases};
 use noodles::vcf::variant::record::info::field::{Value, value::Array as ValueArray};
-use noodles_bgzf::MultithreadedReader;
-use crate::storage::{get_compression_type, get_local_vcf_bgzf_reader, get_remote_stream_bgzf, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_remote_vcf_reader, get_storage_type, CompressionType, StorageType, VcfRemoteReader};
+use crate::storage::{get_local_vcf_bgzf_reader, get_storage_type, StorageType, VcfRemoteReader};
 use crate::table_provider::{info_to_arrow_type, OptionalField};
 
 fn build_record_batch(
@@ -192,7 +180,6 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef,
     let mut filters: Vec<String> = Vec::with_capacity(batch_size);
 
     let mut count: usize = 0;
-    let mut record_num = 0;
     let mut batch_num = 0;
     let schema = Arc::clone(&schema_ref);
     let file_path = file_path.clone();
@@ -210,7 +197,6 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef,
         let iter_start_time = Instant::now();
         while count < batch_size {
             let record = records.next();
-            record_num += 1;
             if record.is_none() {
                 break;
             }
@@ -262,8 +248,8 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef,
 
 async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef,
                                batch_size: usize,
-                               info_fields: Option<Vec<String>>, projection: Option<Vec<usize>>) -> datafusion::error::Result<AsyncStream<datafusion::error::Result<RecordBatch>, impl Future<Output=()> + Sized>> {
-    let mut reader = VcfRemoteReader::new(file_path.clone()).await;
+                               info_fields: Option<Vec<String>>, projection: Option<Vec<usize>>, chunk_size: usize, concurrent_fetches: usize) -> datafusion::error::Result<AsyncStream<datafusion::error::Result<RecordBatch>, impl Future<Output=()> + Sized>> {
+    let mut reader = VcfRemoteReader::new(file_path.clone(), chunk_size, concurrent_fetches).await;
     let header = reader.read_header().await?;
     let infos = header.infos();
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
@@ -370,7 +356,7 @@ fn set_info_builders(batch_size: usize, info_fields: Option<Vec<String>>, infos:
 
 async fn get_stream(file_path: String, schema_ref: SchemaRef, batch_size: usize,
                     thread_num: Option<usize>,
-                    info_fields: Option<Vec<String>>, projection: Option<Vec<usize>>) -> datafusion::error::Result<SendableRecordBatchStream> {
+                    info_fields: Option<Vec<String>>, projection: Option<Vec<usize>>, chunk_size: usize, concurrent_fetches: usize) -> datafusion::error::Result<SendableRecordBatchStream> {
     // Open the BGZF-indexed VCF using IndexedReader.
 
     let file_path = file_path.clone();
@@ -383,7 +369,7 @@ async fn get_stream(file_path: String, schema_ref: SchemaRef, batch_size: usize,
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         },
         StorageType::GCS | StorageType::S3=> {
-            let stream = get_remote_vcf_stream(file_path.clone(), schema.clone(), batch_size, info_fields, projection).await?;
+            let stream = get_remote_vcf_stream(file_path.clone(), schema.clone(), batch_size, info_fields, projection, chunk_size, concurrent_fetches).await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         },
         _ => panic!("Unsupported storage type")
@@ -402,6 +388,8 @@ pub struct VcfExec {
     pub(crate) cache: PlanProperties,
     pub(crate) limit: Option<usize>,
     pub(crate) thread_num: Option<usize>,
+    pub(crate) chunk_size: Option<usize>,
+    pub(crate) concurrent_fetches: Option<usize>,
 }
 
 
@@ -415,6 +403,8 @@ impl VcfExec {
         cache: PlanProperties,
         limit: Option<usize>,
         thread_num: Option<usize>,
+        chunk_size: Option<usize>,
+        concurrent_fetches: Option<usize>,
     ) -> Self {
         debug!("VcfExec::new");
         Self {
@@ -426,13 +416,15 @@ impl VcfExec {
             cache,
             limit,
             thread_num,
+            chunk_size,
+            concurrent_fetches
         }
     }
 }
 
 
 impl Debug for VcfExec {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
         Ok(())
     }
 }
@@ -440,7 +432,7 @@ impl Debug for VcfExec {
 
 
 impl DisplayAs for VcfExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt_as(&self, _t: DisplayFormatType, _f: &mut Formatter) -> std::fmt::Result {
         Ok(())
     }
 
@@ -464,7 +456,7 @@ impl ExecutionPlan for VcfExec {
         vec![]
     }
 
-    fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn ExecutionPlan>>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+    fn with_new_children(self: Arc<Self>, _children: Vec<Arc<dyn ExecutionPlan>>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
 
@@ -479,7 +471,9 @@ impl ExecutionPlan for VcfExec {
                              schema.clone(),
                              batch_size, self.thread_num,
                              self.info_fields.clone(),
-                             self.projection.clone());
+                             self.projection.clone(),
+                             self.chunk_size.unwrap_or(64),
+                             self.concurrent_fetches.unwrap_or(8));
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
 
