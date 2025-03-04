@@ -1,29 +1,26 @@
 use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::ops::Deref;
-use std::ptr::null;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, ArrayBuilder, ArrayRef, BooleanBuilder, Float32Array, Float32Builder, Float64Builder, Int32Array, Int32Builder, Int64Builder, ListBuilder, StringBuilder};
+use datafusion::arrow::array::{ArrayRef, BooleanBuilder, Float32Array, Float32Builder, Int32Array, Int32Builder, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::DataFusionError;
 use datafusion::datasource::TableType;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::{ExecutionMode, ExecutionPlan, PlanProperties};
 use futures::executor::block_on;
 use log::debug;
-use noodles::vcf::Header;
 use noodles::vcf::header::Infos;
 use noodles::vcf::header::record::value::map::info::{Number, Type};
 use crate::physical_exec::VcfExec;
-use crate::storage::{get_header, get_local_vcf_bgzf_reader, get_local_vcf_header, get_remote_vcf_bgzf_reader, get_remote_vcf_header, get_storage_type, StorageType};
+use crate::storage::get_header;
 
 async fn determine_schema_from_header(
     file_path: &str,
     info_fields: &Option<Vec<String>>,
-    format_fields: &Option<Vec<String>>,
+    _format_fields: &Option<Vec<String>>,
 ) -> datafusion::common::Result<SchemaRef> {
 
     let header = get_header(file_path.to_string()).await?;
@@ -61,6 +58,8 @@ pub struct VcfTableProvider {
     format_fields: Option<Vec<String>>,
     schema: SchemaRef,
     thread_num: Option<usize>,
+    chunk_size: Option<usize>,
+    concurrent_fetches: Option<usize>,
 
 }
 
@@ -70,6 +69,8 @@ impl VcfTableProvider {
         info_fields: Option<Vec<String>>,
         format_fields: Option<Vec<String>>,
         thread_num: Option<usize>,
+        chunk_size: Option<usize>,
+        concurrent_fetches: Option<usize>,
     ) -> datafusion::common::Result<Self> {
         let schema = block_on(determine_schema_from_header(&file_path, &info_fields, &format_fields))?;
         Ok(Self {
@@ -77,7 +78,9 @@ impl VcfTableProvider {
             info_fields,
             format_fields,
             schema,
-            thread_num
+            thread_num,
+            chunk_size,
+            concurrent_fetches,
         })
     }
 }
@@ -99,7 +102,7 @@ impl TableProvider for VcfTableProvider {
         todo!()
     }
 
-    async fn scan(&self, state: &dyn Session, projection: Option<&Vec<usize>>, _filters: &[Expr], limit: Option<usize>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+    async fn scan(&self, _state: &dyn Session, projection: Option<&Vec<usize>>, _filters: &[Expr], limit: Option<usize>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         debug!("VcfTableProvider::scan");
 
         let schema = match projection {
@@ -135,6 +138,8 @@ impl TableProvider for VcfTableProvider {
             projection: projection.cloned(),
             limit,
             thread_num: self.thread_num,
+            chunk_size: self.chunk_size,
+            concurrent_fetches: self.concurrent_fetches,
         }))
     }
 }

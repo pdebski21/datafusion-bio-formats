@@ -1,10 +1,8 @@
 use std::fs::File;
-use std::io;
 use std::io::Error;
 use std::num::NonZero;
-use std::sync::Arc;
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use log::debug;
 use noodles::{bgzf, vcf};
@@ -14,7 +12,7 @@ use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::{Gcs, S3};
-use tokio::io::{AsyncRead, BufReader};
+use tokio::io::BufReader;
 use tokio_util::io::StreamReader;
 
 
@@ -95,8 +93,8 @@ pub fn get_compression_type(file_path: String) -> CompressionType {
 
 
 
-pub async fn get_remote_stream_bgzf(file_path: String) ->  Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {
-    let remote_stream = StreamReader::new(get_remote_stream(file_path.clone()).await?);
+pub async fn get_remote_stream_bgzf(file_path: String, chunk_size: usize, concurrent_fetches: usize) ->  Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {
+    let remote_stream = StreamReader::new(get_remote_stream(file_path.clone(), chunk_size, concurrent_fetches).await?);
     Ok(bgzf::r#async::Reader::new(remote_stream))
 
 }
@@ -127,7 +125,7 @@ fn get_bucket_name(file_path: String) -> String {
     bucket_name.to_string()
 }
 
-pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream, opendal::Error> {
+pub async fn get_remote_stream(file_path: String, chunk_size: usize, concurrent_fetches: usize) ->  Result<FuturesBytesStream, opendal::Error> {
     let storage_type = get_storage_type(file_path.clone());
     let bucket_name = get_bucket_name(file_path.clone());
     let file_path = get_file_path(file_path.clone());
@@ -142,7 +140,10 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
                 .layer(RetryLayer::new().with_max_times(3))
                 .layer(LoggingLayer::default())
                 .finish();
-            operator.reader_with(file_path.as_str()).concurrent(1).await?.into_bytes_stream(..).await
+            operator.reader_with(file_path.as_str())
+                .chunk(chunk_size * 1024 * 1024)
+                .concurrent(concurrent_fetches)
+                .await?.into_bytes_stream(..).await
         }
         StorageType::S3 => {
             let builder = S3::default()
@@ -162,15 +163,15 @@ pub async fn get_remote_stream(file_path: String) ->  Result<FuturesBytesStream,
     }
 }
 
-pub async fn get_remote_vcf_bgzf_reader(file_path: String) -> vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>> {
-    let inner = get_remote_stream_bgzf(file_path.clone()).await.unwrap();
-    let mut reader = vcf::r#async::io::Reader::new(inner);
+pub async fn get_remote_vcf_bgzf_reader(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>> {
+    let inner = get_remote_stream_bgzf(file_path.clone(), chunk_size, concurrent_fetches).await.unwrap();
+    let reader = vcf::r#async::io::Reader::new(inner);
     reader
 }
 
-pub async fn get_remote_vcf_reader(file_path: String) -> vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>> {
-    let inner = StreamReader::new(get_remote_stream(file_path.clone()).await.unwrap());
-    let mut reader = vcf::r#async::io::Reader::new(inner);
+pub async fn get_remote_vcf_reader(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>> {
+    let inner = StreamReader::new(get_remote_stream(file_path.clone(), chunk_size, concurrent_fetches).await.unwrap());
+    let reader = vcf::r#async::io::Reader::new(inner);
     reader
 }
 
@@ -187,7 +188,7 @@ pub fn get_local_vcf_bgzf_reader(file_path: String, thread_num: usize) -> Result
 
 pub async fn get_local_vcf_reader(file_path: String) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
     debug!("Reading VCF file from local storage with async reader");
-    let reader = tokio::fs::File::open("sample.vcf")
+    let reader = tokio::fs::File::open(file_path)
         .await
         .map(BufReader::new)
         .map(vcf::r#async::io::Reader::new)?;
@@ -210,15 +211,15 @@ pub async fn get_local_vcf_header(file_path: String, thread_num: usize) -> Resul
     Ok(header)
 }
 
-pub async fn get_remote_vcf_header(file_path: String) -> Result<vcf::Header, Error> {
+pub async fn get_remote_vcf_header(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> Result<vcf::Header, Error> {
     let compression_type = get_compression_type(file_path.clone());
     let header = match compression_type {
         CompressionType::BGZF | CompressionType::GZIP=> {
-            let mut reader = get_remote_vcf_bgzf_reader(file_path).await;
+            let mut reader = get_remote_vcf_bgzf_reader(file_path, chunk_size, concurrent_fetches).await;
             reader.read_header().await?
         }
         CompressionType::NONE => {
-            let mut reader = get_remote_vcf_reader(file_path).await;
+            let mut reader = get_remote_vcf_reader(file_path, chunk_size, concurrent_fetches).await;
             reader.read_header().await?
         }
     };
@@ -232,7 +233,7 @@ pub async fn get_header(file_path: String) -> Result<vcf::Header, Error> {
             get_local_vcf_header(file_path, 1).await?
         }
         _ => {
-            get_remote_vcf_header(file_path).await?
+            get_remote_vcf_header(file_path, 64,1).await?
         }
     };
     Ok(header)
@@ -244,15 +245,15 @@ pub enum VcfRemoteReader {
 }
 
 impl VcfRemoteReader {
-    pub async fn new(file_path: String) -> Self {
+    pub async fn new(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> Self {
         let compression_type = get_compression_type(file_path.clone());
         match compression_type {
             CompressionType::BGZF | CompressionType::GZIP=> {
-                let reader = get_remote_vcf_bgzf_reader(file_path).await;
+                let reader = get_remote_vcf_bgzf_reader(file_path, chunk_size, concurrent_fetches).await;
                 VcfRemoteReader::BGZF(reader)
             }
             CompressionType::NONE => {
-                let reader = get_remote_vcf_reader(file_path).await;
+                let reader = get_remote_vcf_reader(file_path, chunk_size, concurrent_fetches).await;
                 VcfRemoteReader::PLAIN(reader)
             }
         }

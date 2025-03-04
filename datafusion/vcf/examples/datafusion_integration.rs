@@ -1,6 +1,4 @@
 use std::sync::Arc;
-use datafusion::config::CsvOptions;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::SessionContext;
 use datafusion_vcf::table_provider::VcfTableProvider;
 
@@ -20,12 +18,12 @@ async fn main() -> datafusion::error::Result<()> {
     let ctx = SessionContext::new();
     ctx.sql("set datafusion.execution.skip_physical_aggregate_schema_check=true").await?;
     // let table_provider = VcfTableProvider::new("/tmp/gnomad.exomes.v4.1.sites.chr21.vcf.bgz".parse().unwrap(), vec!["SVTYPE".parse().unwrap()], vec![], Some(8))?;
-    let table_provider = VcfTableProvider::new(path, infos, None, Some(4))?;
+    let table_provider = VcfTableProvider::new(path, infos, None, Some(4), None,None)?;
     ctx.register_table("custom_table", Arc::new(table_provider)).expect("TODO: panic message");
     // let df = ctx.sql("SELECT svtype, count(*) as cnt FROM custom_table group by svtype").await?;
-    let df = ctx.sql("SELECT count(*) as cnt FROM custom_table").await?;
+    // let df = ctx.sql("SELECT count(*) as cnt FROM custom_table").await?;
     // df.clone().write_csv("/tmp/gnomad.exomes.v4.1.sites.chr21-old.csv", DataFrameWriteOptions::default(), Some(CsvOptions::default())).await?;
-    // let df = ctx.sql("SELECT * FROM custom_table LIMIT 5").await?;
+    let df = ctx.sql("SELECT chrom FROM custom_table LIMIT 5").await?;
     // println!("{:?}", df.explain(false, false)?);
     df.show().await.expect("TODO: panic message");
     // println!("{:?}", );

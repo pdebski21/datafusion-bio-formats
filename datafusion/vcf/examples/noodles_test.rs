@@ -67,10 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 
-// let builder = Gcs::default()
-//     .bucket(BUCKET)
-//     .disable_vm_metadata()
-//     .allow_anonymous();
+let builder = Gcs::default()
+    .bucket(BUCKET)
+    .disable_vm_metadata()
+    .allow_anonymous();
 //
 // let operator = Operator::new(builder)?.finish();
 //
