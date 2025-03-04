@@ -1,8 +1,9 @@
 use std::fs::File;
 use std::io::Error;
 use std::num::NonZero;
+use async_stream::stream;
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use futures::stream::BoxStream;
 use log::debug;
 use noodles::{bgzf, vcf};
@@ -244,6 +245,8 @@ pub enum VcfRemoteReader {
     PLAIN( vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>>)
 }
 
+
+
 impl VcfRemoteReader {
     pub async fn new(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> Self {
         let compression_type = get_compression_type(file_path.clone());
@@ -281,3 +284,44 @@ impl VcfRemoteReader {
     }
 }
 
+pub enum VcfLocalReader {
+    BGZF(Reader<MultithreadedReader<File>>),
+    PLAIN(vcf::r#async::io::Reader<BufReader<tokio::fs::File>>)
+}
+
+impl VcfLocalReader {
+    pub async fn new(file_path: String, thread_num: usize) -> Self {
+        let compression_type = get_compression_type(file_path.clone());
+        match compression_type {
+            CompressionType::BGZF | CompressionType::GZIP=> {
+                let reader = get_local_vcf_bgzf_reader(file_path, thread_num).unwrap();
+                VcfLocalReader::BGZF(reader)
+            }
+            CompressionType::NONE => {
+                let reader = get_local_vcf_reader(file_path).await.unwrap();
+                VcfLocalReader::PLAIN(reader)
+            }
+        }
+    }
+    pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
+        match self {
+            VcfLocalReader::BGZF(reader) => {
+                reader.read_header()
+            }
+            VcfLocalReader::PLAIN(reader) => {
+                reader.read_header().await
+            }
+        }
+    }
+
+    pub fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
+        match self {
+            VcfLocalReader::BGZF(reader) => {
+                stream::iter(reader.records()).boxed()
+            }
+            VcfLocalReader::PLAIN(reader) => {
+                reader.records().boxed()
+            }
+        }
+    }
+}

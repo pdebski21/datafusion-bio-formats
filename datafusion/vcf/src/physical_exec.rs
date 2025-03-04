@@ -20,7 +20,7 @@ use noodles::vcf::header::Infos;
 use noodles::vcf::variant::Record;
 use noodles::vcf::variant::record::{AlternateBases, Filters, Ids, ReferenceBases};
 use noodles::vcf::variant::record::info::field::{Value, value::Array as ValueArray};
-use crate::storage::{get_local_vcf_bgzf_reader, get_storage_type, StorageType, VcfRemoteReader};
+use crate::storage::{get_local_vcf_bgzf_reader, get_storage_type, StorageType, VcfLocalReader, VcfRemoteReader};
 use crate::table_provider::{info_to_arrow_type, OptionalField};
 
 fn build_record_batch(
@@ -184,26 +184,21 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef,
     let schema = Arc::clone(&schema_ref);
     let file_path = file_path.clone();
     let thread_num = thread_num.unwrap_or(1);
-    let mut reader = get_local_vcf_bgzf_reader(file_path, thread_num)?;
-    let header = reader.read_header()?;
+    let mut reader = VcfLocalReader::new(file_path.clone(), thread_num).await;
+    let header = reader.read_header().await?;
     let infos = header.infos();
-
+    let mut record_num = 0;
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) = (Vec::new(), Vec::new(), Vec::new());
     set_info_builders(batch_size, info_fields, &infos, &mut info_builders);
 
-    let iter  = std::iter::from_fn(move || {
+    let stream = try_stream! {
 
-        let mut records = reader.records();
+        let mut records = reader.read_records();
         let iter_start_time = Instant::now();
-        while count < batch_size {
-            let record = records.next();
-            if record.is_none() {
-                break;
-            }
-            let record = record.unwrap().unwrap();
-            // For each record, fill the fixed columns.
+        while let Some(result) = records.next().await {
+            let record = result?;  // propagate errors if any
             chroms.push(record.reference_sequence_name().to_string());
-            poss.push(record.variant_start().unwrap().unwrap().get() as u32);
+            poss.push(record.variant_start().unwrap()?.get() as u32);
             pose.push(get_variant_end(&record, &header));
             ids.push(record.ids().iter().map(|v| v.to_string()).collect::<Vec<String>>().join(";"));
             refs.push(record.reference_bases().to_string());
@@ -211,37 +206,59 @@ async fn get_local_vcf(file_path: String, schema_ref: SchemaRef,
             quals.push(record.quality_score().unwrap_or(Ok(0.0)).unwrap() as f64);
             filters.push(record.filters().iter(&header).map(|v| v.unwrap_or(".").to_string()).collect::<Vec<String>>().join(";"));
             load_infos(Box::new(record), &header, &mut info_builders);
-            count += 1;
+            record_num += 1;
+            // Once the batch size is reached, build and yield a record batch.
+            if record_num % batch_size == 0 {
+                debug!("Record number: {}", record_num);
+                let batch = build_record_batch(
+                    Arc::clone(&schema.clone()),
+                    &chroms,
+                    &poss,
+                    &pose,
+                    &ids,
+                    &refs,
+                    &alts,
+                    &quals,
+                    &filters,
+                    Some(&builders_to_arrays(&mut info_builders.2)), projection.clone(),
+                    // if infos.is_empty() { None } else { Some(&infos) },
+
+                )?;
+                batch_num += 1;
+                debug!("Batch number: {}", batch_num);
+                yield batch;
+                // Clear vectors for the next batch.
+                chroms.clear();
+                poss.clear();
+                pose.clear();
+                ids.clear();
+                refs.clear();
+                alts.clear();
+                quals.clear();
+                filters.clear();
+
+            }
         }
-        if count == 0 {
-            return None;
+        // If there are remaining records that don't fill a complete batch,
+        // yield them as well.
+        if !chroms.is_empty() {
+            let batch = build_record_batch(
+                Arc::clone(&schema.clone()),
+                &chroms,
+                &poss,
+                &pose,
+                &ids,
+                &refs,
+                &alts,
+                &quals,
+                &filters,
+                Some(&builders_to_arrays(&mut info_builders.2)), projection.clone(),
+                // if infos.is_empty() { None } else { Some(&infos) },
+            )?;
+            yield batch;
         }
-        let duration = iter_start_time.elapsed();
-        debug!("Time elapsed in iterating records: {:?}", duration);
-        debug!("Batch number: {}", batch_num);
-        let start_time = Instant::now();
-        let batch = build_record_batch(Arc::clone(&schema),
-                                       &chroms, &poss, &pose,
-                                       &ids, &refs, &alts,
-                                       &quals, &filters,
-                                       Some(&builders_to_arrays(&mut info_builders.2)),
-                                       projection.clone()
-        ).unwrap();
-        let duration = start_time.elapsed();
-        debug!("Time elapsed in building batch: {:?}", duration);
-        count = 0;
-        chroms.clear();
-        poss.clear();
-        pose.clear();
-        ids.clear();
-        refs.clear();
-        alts.clear();
-        quals.clear();
-        filters.clear();
-        batch_num += 1;
-        Some(Ok(batch))
-    });
-    Ok(stream::iter(iter))
+    };
+    Ok(stream)
 }
 
 
