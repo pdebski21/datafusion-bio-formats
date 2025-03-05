@@ -1,14 +1,20 @@
 use std::fs::File;
 use std::io::Error;
 use std::num::NonZero;
+use std::sync::Arc;
 use async_stream::stream;
 use bytes::Bytes;
+use datafusion::arrow;
+use datafusion::arrow::array::StringBuilder;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::ipc::RecordBatch;
+use datafusion::datasource::MemTable;
 use futures::{stream, StreamExt};
 use futures::stream::BoxStream;
 use log::debug;
 use noodles::{bgzf, vcf};
 use noodles::vcf::io::Reader;
-use noodles::vcf::Record;
+use noodles::vcf::{Header, Record};
 use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::{FuturesBytesStream, Operator};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
@@ -271,6 +277,20 @@ impl VcfRemoteReader {
             }
         }
     }
+    pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
+        match self {
+            VcfRemoteReader::BGZF(reader) => {
+                let header = reader.read_header().await?;
+                Ok(get_info_fields(&header).await)
+            }
+            VcfRemoteReader::PLAIN(reader) => {
+                let header = reader.read_header().await?;
+                Ok(get_info_fields(&header).await)
+            }
+        }
+    }
+
+
 
     pub async fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
         match self {
@@ -324,4 +344,94 @@ impl VcfLocalReader {
             }
         }
     }
+    pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
+        match self {
+            VcfLocalReader::BGZF(reader) => {
+                let header = reader.read_header()?;
+                Ok(get_info_fields(&header).await)
+            }
+            VcfLocalReader::PLAIN(reader) => {
+                let header = reader.read_header().await?;
+                Ok(get_info_fields(&header).await)
+            }
+        }
+    }
+}
+
+pub async fn get_info_fields(header: &Header) -> arrow::array::RecordBatch {
+    let info_fields = header.infos();
+    let mut field_names = StringBuilder::new();
+    let mut field_types = StringBuilder::new();
+    let mut field_descriptions = StringBuilder::new();
+    for (field_name, field) in info_fields {
+        field_names.append_value(field_name.to_lowercase());
+        field_types.append_value(field.ty().to_string());
+        field_descriptions.append_value(field.description());
+    }
+    // build RecordBatch
+    let field_names = field_names.finish();
+    let field_types = field_types.finish();
+    let field_descriptions = field_descriptions.finish();
+    let schema = arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("name", arrow::datatypes::DataType::Utf8, false),
+        arrow::datatypes::Field::new("type", arrow::datatypes::DataType::Utf8, false),
+        arrow::datatypes::Field::new("description", arrow::datatypes::DataType::Utf8, false),
+    ]);
+    let record_batch = arrow::record_batch::RecordBatch::try_new(
+        SchemaRef::from(schema.clone()),
+        vec![Arc::new(field_names),Arc::new(field_types),Arc::new(field_descriptions)]
+    ).unwrap();
+    record_batch
+}
+
+pub enum VcfReader {
+    Local(VcfLocalReader),
+    Remote(VcfRemoteReader)
+}
+
+impl VcfReader {
+
+    pub async fn new(file_path: String, thread_num: Option<usize>, chunk_size: Option<usize>, concurrency_fetches: Option<usize>) -> Self {
+        let storage_type = get_storage_type(file_path.clone());
+        match storage_type {
+            StorageType::LOCAL => {
+                VcfReader::Local(VcfLocalReader::new(file_path, thread_num.unwrap_or(1)).await)
+            }
+            _ => {
+                VcfReader::Remote(VcfRemoteReader::new(file_path, chunk_size.unwrap_or(64), concurrency_fetches.unwrap_or(8)).await)
+            }
+        }
+    }
+
+    pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
+        match self {
+            VcfReader::Local(reader) => {
+                reader.read_header().await
+            }
+            VcfReader::Remote(reader) => {
+                reader.read_header().await
+            }
+        }
+    }
+    pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
+        match self {
+            VcfReader::Local(reader) => {
+                reader.describe().await
+            }
+            VcfReader::Remote(reader) => {
+                reader.describe().await
+            }
+        }
+    }
+    pub async fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
+        match self {
+            VcfReader::Local(reader) => {
+                reader.read_records()
+            }
+            VcfReader::Remote(reader) => {
+                reader.read_records().await
+            }
+        }
+    }
+
 }
