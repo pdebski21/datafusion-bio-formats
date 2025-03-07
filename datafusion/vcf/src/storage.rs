@@ -364,7 +364,7 @@ pub async fn get_info_fields(header: &Header) -> arrow::array::RecordBatch {
     let mut field_types = StringBuilder::new();
     let mut field_descriptions = StringBuilder::new();
     for (field_name, field) in info_fields {
-        field_names.append_value(field_name.to_lowercase());
+        field_names.append_value(field_name);
         field_types.append_value(field.ty().to_string());
         field_descriptions.append_value(field.description());
     }
