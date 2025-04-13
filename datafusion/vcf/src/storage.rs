@@ -138,15 +138,38 @@ fn get_bucket_name(file_path: String) -> String {
     bucket_name.to_string()
 }
 
-pub async fn get_remote_stream(
-    file_path: String,
-    chunk_size: usize,
-    concurrent_fetches: usize,
-) -> Result<FuturesBytesStream, opendal::Error> {
+pub async fn get_remote_stream(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> Result<FuturesBytesStream, opendal::Error> {
     let storage_type = get_storage_type(file_path.clone());
     let bucket_name = get_bucket_name(file_path.clone());
     let file_path = get_file_path(file_path.clone());
+    
     match storage_type {
+        StorageType::S3 => {
+            let builder = S3::default()
+                .region(&S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str()).await.unwrap())
+                .bucket(bucket_name.as_str())
+                .disable_ec2_metadata()
+                .allow_anonymous();
+                
+            let operator = Operator::new(builder)?
+                .layer(TimeoutLayer::new()
+                    .with_io_timeout(std::time::Duration::from_secs(300)))  // 5 minutes
+                .layer(RetryLayer::new()
+                    .with_max_times(5))  // Retry up to 5 times
+                .layer(LoggingLayer::default())
+                .finish();
+
+            // Reduce chunk size and increase concurrency for better reliability
+            let adjusted_chunk_size = chunk_size.min(8 * 1024 * 1024); // Max 8MB chunks
+            let adjusted_concurrency = concurrent_fetches.max(4); // Min 4 concurrent fetches
+
+            operator.reader_with(file_path.as_str())
+                .chunk(adjusted_chunk_size)
+                .concurrent(adjusted_concurrency)
+                .await?
+                .into_bytes_stream(..)
+                .await
+        }
         StorageType::GCS => {
             let builder = Gcs::default()
                 .bucket(bucket_name.as_str())
@@ -165,29 +188,6 @@ pub async fn get_remote_stream(
                 .into_bytes_stream(..)
                 .await
         }
-        StorageType::S3 => {
-            let builder = S3::default()
-                .region(
-                    &S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str())
-                        .await
-                        .unwrap(),
-                )
-                .bucket(bucket_name.as_str())
-                .disable_ec2_metadata()
-                .allow_anonymous();
-            let operator = Operator::new(builder)?
-                .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
-                .layer(RetryLayer::new().with_max_times(3))
-                .layer(LoggingLayer::default())
-                .finish();
-            operator
-                .reader_with(file_path.as_str())
-                .concurrent(1)
-                .await?
-                .into_bytes_stream(..)
-                .await
-        }
-
         _ => panic!("Invalid object storage type"),
     }
 }
