@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::array::{ArrayRef, BooleanBuilder, Float32Array, Float32Builder, Int32Array, Int32Builder, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::error::ArrowError;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::TableType;
 use datafusion::logical_expr::Expr;
@@ -201,114 +202,108 @@ pub enum OptionalField {
 }
 
 impl OptionalField {
-    pub(crate) fn new(data_type: &DataType, batch_size: usize) -> OptionalField {
+    pub(crate) fn new(data_type: &DataType, batch_size: usize) -> Result<OptionalField, ArrowError> {
         match data_type {
-            DataType::Int32 => OptionalField::Int32Builder(Int32Builder::with_capacity(batch_size)),
-            DataType::List(f) => {
-                match f.data_type() {
-                    DataType::Int32 => OptionalField::ArrayInt32Builder(ListBuilder::with_capacity(Int32Builder::new(), batch_size)),
-                    DataType::Float32 => OptionalField::ArrayFloat32Builder(ListBuilder::with_capacity(Float32Builder::new(), batch_size)),
-                    DataType::Utf8 => OptionalField::ArrayUtf8Builder(ListBuilder::with_capacity(StringBuilder::new() , batch_size)),
-                    DataType::Boolean => OptionalField::ArrayBooleanBuilder(ListBuilder::with_capacity(BooleanBuilder::new(), batch_size)),
-                    _ => panic!("Unsupported data type"),
-                }
+            DataType::Int32 => Ok(OptionalField::Int32Builder(Int32Builder::with_capacity(batch_size))),
+            DataType::List(f) => match f.data_type() {
+                DataType::Int32 => Ok(OptionalField::ArrayInt32Builder(ListBuilder::with_capacity(Int32Builder::new(), batch_size),)),
+                DataType::Float32 => Ok(OptionalField::ArrayFloat32Builder(ListBuilder::with_capacity(Float32Builder::new(), batch_size),)),
+                DataType::Utf8 => Ok(OptionalField::ArrayUtf8Builder(ListBuilder::with_capacity(StringBuilder::new(), batch_size),)),
+                DataType::Boolean => Ok(OptionalField::ArrayBooleanBuilder(ListBuilder::with_capacity(BooleanBuilder::new(), batch_size),)),
+                _ => Err(ArrowError::SchemaError("Unsupported list inner data type".into())),
             },
-            DataType::Float32 => OptionalField::Float32Builder(Float32Builder::new()),
-            DataType::Utf8 => OptionalField::Utf8Builder(StringBuilder::new()),
-            DataType::Boolean => OptionalField::BooleanBuilder(BooleanBuilder::with_capacity(batch_size)),
-            _ => panic!("Unsupported data type"),
+            DataType::Float32 => Ok(OptionalField::Float32Builder(Float32Builder::new())),
+            DataType::Utf8 => Ok(OptionalField::Utf8Builder(StringBuilder::new())),
+            DataType::Boolean => Ok(OptionalField::BooleanBuilder(BooleanBuilder::with_capacity(batch_size))),
+            _ => Err(ArrowError::SchemaError("Unsupported data type".into())),
         }
     }
 
-    pub fn append_int(&mut self, value: i32) {
+    pub fn append_int(&mut self, value: i32) -> Result<(), ArrowError> {
         match self {
-            OptionalField::Int32Builder(builder) => builder.append_value(value),
-            _ => panic!("Unsupported data type"),
+            OptionalField::Int32Builder(builder) => Ok(builder.append_value(value)),
+            _ => Err(ArrowError::SchemaError("Invalid builder".into())),
         }
     }
 
-    pub fn append_boolean(&mut self, value: bool) {
+    pub fn append_boolean(&mut self, value: bool) -> Result<(), ArrowError> {
         match self {
-            OptionalField::BooleanBuilder(builder) => builder.append_value(value),
-            _ => panic!("Unsupported data type"),
+            OptionalField::BooleanBuilder(builder) => Ok(builder.append_value(value)),
+            _ => Err(ArrowError::SchemaError("Expected BooleanBuilder".into())),
         }
     }
 
-    pub fn append_array_int(&mut self, value: Vec<i32>) {
+    pub fn append_array_int(&mut self, value: Vec<i32>) -> Result<(), ArrowError> {
         match self {
             OptionalField::ArrayInt32Builder(builder) => {
-                let a = Int32Array::from(value);
-                builder.values().append_slice(a.values());
-                builder.append(true);
-            },
-            _ => panic!("Unsupported data type"),
+                builder.values().append_slice(&value);
+                Ok(builder.append(true))
+            }
+            _ => Err(ArrowError::SchemaError("Expected ArrayInt32Builder".into())),
         }
     }
 
-    pub fn append_float(&mut self, value: f32) {
+    pub fn append_float(&mut self, value: f32) -> Result<(), ArrowError> {
         match self {
-            OptionalField::Float32Builder(builder) => builder.append_value(value),
-
-            _ => panic!("Unsupported data type"),
+            OptionalField::Float32Builder(builder) => Ok(builder.append_value(value)),
+            _ => Err(ArrowError::SchemaError("Expected Float32Builder".into())),
         }
     }
 
-    pub fn append_array_float(&mut self, value: Vec<f32>) {
+    pub fn append_array_float(&mut self, value: Vec<f32>) -> Result<(), ArrowError> {
         match self {
             OptionalField::ArrayFloat32Builder(builder) => {
-                let a = Float32Array::from(value);
-                builder.values().append_slice(a.values());
-                builder.append(true);
-            },
-            _ => panic!("Unsupported data type"),
+                builder.values().append_slice(&value);
+                Ok(builder.append(true))
+            }
+            _ => Err(ArrowError::SchemaError("Expected ArrayFloat32Builder".into())),
         }
     }
 
-    pub fn append_string(&mut self, value: &str) {
+    pub fn append_string(&mut self, value: &str) -> Result<(), ArrowError> {
         match self {
-            OptionalField::Utf8Builder(builder) => builder.append_value(value),
-            _ => panic!("Unsupported data type"),
+            OptionalField::Utf8Builder(builder) => Ok(builder.append_value(value)),
+            _ => Err(ArrowError::SchemaError("Expected Utf8Builder".into())),
         }
     }
 
-    pub fn append_array_string(&mut self, value: Vec<String>) {
+    pub fn append_array_string(&mut self, value: Vec<String>) -> Result<(), ArrowError> {
         match self {
             OptionalField::ArrayUtf8Builder(builder) => {
                 for v in value {
                     builder.values().append_value(&v);
                 }
-                builder.append(true);
-            },
-            _ => panic!("Unsupported data type"),
+                Ok(builder.append(true))
+            }
+            _ => Err(ArrowError::SchemaError("Expected ArrayUtf8Builder".into())),
         }
     }
 
-    pub fn append_null(&mut self){
+    pub fn append_null(&mut self) -> Result<(), ArrowError> {
         match self {
-            OptionalField::Int32Builder(builder) => builder.append_null(),
-            OptionalField::ArrayInt32Builder(builder) => builder.append_null(),
-            OptionalField::Utf8Builder(builder) => builder.append_null(),
-            OptionalField::ArrayUtf8Builder(builder) => builder.append_null(),
-            OptionalField::Float32Builder(builder) => builder.append_null(),
-            OptionalField::ArrayFloat32Builder(builder) => builder.append_null(),
-            OptionalField::BooleanBuilder(builder) => builder.append_null(),
-            OptionalField::ArrayBooleanBuilder(builder) => builder.append_null(),
-
+            OptionalField::Int32Builder(builder) => Ok(builder.append_null()),
+            OptionalField::ArrayInt32Builder(builder) => Ok(builder.append_null()),
+            OptionalField::Utf8Builder(builder) => Ok(builder.append_null()),
+            OptionalField::ArrayUtf8Builder(builder) => Ok(builder.append_null()),
+            OptionalField::Float32Builder(builder) => Ok(builder.append_null()),
+            OptionalField::ArrayFloat32Builder(builder) => Ok(builder.append_null()),
+            OptionalField::BooleanBuilder(builder) => Ok(builder.append_null()),
+            OptionalField::ArrayBooleanBuilder(builder) => Ok(builder.append_null()),
         }
     }
 
-    pub fn finish(&mut self) -> ArrayRef {
-        match self {
-            OptionalField::Int32Builder(builder) => Arc::new(builder.finish()),
-            OptionalField::ArrayInt32Builder(builder) => Arc::new(builder.finish()),
-            OptionalField::Utf8Builder(builder) => Arc::new(builder.finish()),
-            OptionalField::ArrayUtf8Builder(builder) => Arc::new(builder.finish()),
-            OptionalField::Float32Builder(builder) => Arc::new(builder.finish()),
-            OptionalField::ArrayFloat32Builder(builder) => Arc::new(builder.finish()),
-            OptionalField::BooleanBuilder(builder) => Arc::new(builder.finish()),
-            OptionalField::ArrayBooleanBuilder(builder) => Arc::new(builder.finish()),
-        }
+    pub fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
+    match self {
+        OptionalField::Int32Builder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::ArrayInt32Builder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::Utf8Builder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::ArrayUtf8Builder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::Float32Builder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::ArrayFloat32Builder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::BooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
+        OptionalField::ArrayBooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
     }
+}
 }
 
 
