@@ -145,7 +145,7 @@ fn load_infos (record: Box<dyn Record>, header: &Header, info_builders: &mut (Ve
 }
 
 fn builders_to_arrays(builders: &mut Vec<OptionalField>) -> Vec<Arc<dyn Array>> {
-    builders.iter_mut().map(|f| f.finish()).collect::<Vec<Arc<dyn Array>>>()
+    builders.iter_mut().map(|f| f.finish()).collect::<Result<Vec<_>, _>>().unwrap()
 }
 
 fn get_variant_end(record: &dyn Record, header: &Header) -> u32 {
@@ -364,7 +364,7 @@ async fn get_remote_vcf_stream(file_path: String, schema: SchemaRef,
 fn set_info_builders(batch_size: usize, info_fields: Option<Vec<String>>, infos: &Infos, info_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>)) {
     for f in info_fields.unwrap_or(Vec::new()) {
         let data_type = info_to_arrow_type(&infos, &f);
-        let field = OptionalField::new(&data_type, batch_size);
+        let field = OptionalField::new(&data_type, batch_size).unwrap();
         info_builders.0.push(f);
         info_builders.1.push(data_type);
         info_builders.2.push(field);
