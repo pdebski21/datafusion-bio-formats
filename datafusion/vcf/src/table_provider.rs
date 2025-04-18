@@ -180,12 +180,14 @@ pub fn info_to_arrow_type(infos: &Infos, field: &str) -> DataType {
                 Type::Float => DataType::Float32,
                 Type::Flag => DataType::Boolean,
             };
+
             match t.number() {
-                Number::Count(1) | Number::Count(0) => inner,
-                _ => DataType::new_list(inner, true),
-                // Number::Unbounded | Number::Unknown | Number::Count(_) => DataType::List(Arc::new(Field::new("item", inner.clone(), true))),
+                Number::Count(0) | Number::Count(1) => inner,
+                Number::Count(_) | Number::Unknown | Number::AlternateBases | Number::ReferenceAlternateBases | Number::Samples => {
+                    DataType::List(Arc::new(Field::new("item", inner, true)))
+                }
             }
-        },
+        }
         None => {
             log::warn!("VCF tag '{}' not found in header; defaulting to Utf8", field);
             DataType::Utf8
