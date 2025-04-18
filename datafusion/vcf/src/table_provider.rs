@@ -41,7 +41,9 @@ async fn determine_schema_from_header(
         Some(infos) => {
             for tag in infos {
                 let dtype = info_to_arrow_type(&header_infos, tag);
-                fields.push(Field::new(tag.to_lowercase(), dtype, true));
+                // fields.push(Field::new(tag.to_lowercase(), dtype, true));
+                let nullable = true; // or infer from header/tag definition
+                fields.push(Field::new(tag.to_lowercase(), dtype, nullable));
             }
         }
         _ => {}
@@ -90,7 +92,8 @@ impl VcfTableProvider {
 #[async_trait]
 impl TableProvider for VcfTableProvider {
     fn as_any(&self) -> &dyn Any {
-        todo!()
+        self
+        // todo!()
     }
 
     fn schema(&self) -> SchemaRef {
@@ -99,33 +102,49 @@ impl TableProvider for VcfTableProvider {
     }
 
     fn table_type(&self) -> TableType {
-        todo!()
+        TableType::Base
+        // todo!()
     }
 
     async fn scan(&self, _state: &dyn Session, projection: Option<&Vec<usize>>, _filters: &[Expr], limit: Option<usize>) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         debug!("VcfTableProvider::scan");
 
-        let schema = match projection {
-            Some(p) => {
-                if p.len() == 0 {
-                    Arc::new(Schema::new(vec![
-                        Field::new("dummy", DataType::Null, true),
-                    ]))
+        fn project_schema(schema: &SchemaRef, projection: Option<&Vec<usize>>) -> SchemaRef {
+            match projection {
+                Some(indices) if indices.is_empty() => {
+                    Arc::new(Schema::new(vec![Field::new("dummy", DataType::Null, true)]))
                 }
-                else {
-                    let schema_fields = self.schema.fields();
-                    let proj = projection.unwrap().clone();
-                    let mut fields: Vec<Field> = Vec::with_capacity(proj.len());
-                    for i in proj {
-                        fields.push(schema_fields[i].deref().clone());
-                    }
-                    Arc::new(Schema::new(fields))
+                Some(indices) => {
+                    let projected_fields: Vec<Field> = indices.iter().map(|&i| schema.field(i).clone()).collect();
+                    Arc::new(Schema::new(projected_fields))
                 }
-            },
-            None => {
-                self.schema.clone()
+                None => schema.clone(),
             }
-        };
+        }
+
+        let schema = project_schema(&self.schema, projection);
+
+        // let schema = match projection {
+        //     Some(p) => {
+        //         if p.len() == 0 {
+        //             Arc::new(Schema::new(vec![
+        //                 Field::new("dummy", DataType::Null, true),
+        //             ]))
+        //         }
+        //         else {
+        //             let schema_fields = self.schema.fields();
+        //             let proj = p.clone();
+        //             let mut fields: Vec<Field> = Vec::with_capacity(proj.len());
+        //             for i in proj {
+        //                 fields.push(schema_fields[i].deref().clone());
+        //             }
+        //             Arc::new(Schema::new(fields))
+        //         }
+        //     },
+        //     None => {
+        //         self.schema.clone()
+        //     }
+        // };
 
         Ok(Arc::new(VcfExec {
             cache: PlanProperties::new( EquivalenceProperties::new(schema.clone()),
@@ -145,7 +164,9 @@ impl TableProvider for VcfTableProvider {
 }
 
 
-pub fn info_to_arrow_type(infos: &Infos, field: &str) ->DataType {
+
+
+pub fn info_to_arrow_type(infos: &Infos, field: &str) -> DataType {
     match infos.get(field) {
         Some(t) => {
             let inner = match t.ty() {
@@ -153,16 +174,20 @@ pub fn info_to_arrow_type(infos: &Infos, field: &str) ->DataType {
                 Type::String | Type::Character => DataType::Utf8,
                 Type::Float => DataType::Float32,
                 Type::Flag => DataType::Boolean,
-                _ => panic!("Unsupported tag type"),
             };
             match t.number() {
                 Number::Count(1) | Number::Count(0) => inner,
                 _ => DataType::new_list(inner, true),
+                // Number::Unbounded | Number::Unknown | Number::Count(_) => DataType::List(Arc::new(Field::new("item", inner.clone(), true))),
             }
         },
-        None => panic!("Tag not found in header"),
+        None => {
+            log::warn!("VCF tag '{}' not found in header; defaulting to Utf8", field);
+            DataType::Utf8
+        }
     }
 }
+
 #[derive(Debug)]
 pub enum OptionalField {
     Int32Builder(Int32Builder),
@@ -176,7 +201,6 @@ pub enum OptionalField {
 }
 
 impl OptionalField {
-
     pub(crate) fn new(data_type: &DataType, batch_size: usize) -> OptionalField {
         match data_type {
             DataType::Int32 => OptionalField::Int32Builder(Int32Builder::with_capacity(batch_size)),
@@ -195,6 +219,7 @@ impl OptionalField {
             _ => panic!("Unsupported data type"),
         }
     }
+
     pub fn append_int(&mut self, value: i32) {
         match self {
             OptionalField::Int32Builder(builder) => builder.append_value(value),
@@ -219,6 +244,7 @@ impl OptionalField {
             _ => panic!("Unsupported data type"),
         }
     }
+
     pub fn append_float(&mut self, value: f32) {
         match self {
             OptionalField::Float32Builder(builder) => builder.append_value(value),
@@ -226,6 +252,7 @@ impl OptionalField {
             _ => panic!("Unsupported data type"),
         }
     }
+
     pub fn append_array_float(&mut self, value: Vec<f32>) {
         match self {
             OptionalField::ArrayFloat32Builder(builder) => {
@@ -243,6 +270,7 @@ impl OptionalField {
             _ => panic!("Unsupported data type"),
         }
     }
+
     pub fn append_array_string(&mut self, value: Vec<String>) {
         match self {
             OptionalField::ArrayUtf8Builder(builder) => {
@@ -254,7 +282,6 @@ impl OptionalField {
             _ => panic!("Unsupported data type"),
         }
     }
-
 
     pub fn append_null(&mut self){
         match self {
@@ -269,6 +296,7 @@ impl OptionalField {
 
         }
     }
+
     pub fn finish(&mut self) -> ArrayRef {
         match self {
             OptionalField::Int32Builder(builder) => Arc::new(builder.finish()),
@@ -281,7 +309,6 @@ impl OptionalField {
             OptionalField::ArrayBooleanBuilder(builder) => Arc::new(builder.finish()),
         }
     }
-
 }
 
 
