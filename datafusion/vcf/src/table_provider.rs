@@ -41,9 +41,9 @@ async fn determine_schema_from_header(
     match info_fields   {
         Some(infos) => {
             for tag in infos {
-                let dtype = info_to_arrow_type(&header_infos, tag);
-                // fields.push(Field::new(tag.to_lowercase(), dtype, true));
-                let nullable = true; // or infer from header/tag definition
+                let dtype = info_to_arrow_type(&header_infos, &tag);
+                let info = header_infos.get(tag.as_str()).unwrap();
+                let nullable = is_nullable(&info.ty());
                 fields.push(Field::new(tag.to_lowercase(), dtype, nullable));
             }
         }
@@ -52,6 +52,10 @@ async fn determine_schema_from_header(
     let schema = Schema::new(fields);
     // println!("Schema: {:?}", schema);
     Ok(Arc::new(schema))
+}
+
+fn is_nullable(ty: &Type) -> bool {
+    !matches!(ty, Type::Flag)
 }
 
 #[derive(Clone, Debug)]
@@ -205,16 +209,18 @@ impl OptionalField {
     pub(crate) fn new(data_type: &DataType, batch_size: usize) -> Result<OptionalField, ArrowError> {
         match data_type {
             DataType::Int32 => Ok(OptionalField::Int32Builder(Int32Builder::with_capacity(batch_size))),
+            DataType::Float32 => Ok(OptionalField::Float32Builder(Float32Builder::with_capacity(batch_size))),
+            DataType::Utf8 => Ok(OptionalField::Utf8Builder(StringBuilder::with_capacity(batch_size, batch_size * 10))),
+            DataType::Boolean => Ok(OptionalField::BooleanBuilder(BooleanBuilder::with_capacity(batch_size))),
+    
             DataType::List(f) => match f.data_type() {
-                DataType::Int32 => Ok(OptionalField::ArrayInt32Builder(ListBuilder::with_capacity(Int32Builder::new(), batch_size),)),
-                DataType::Float32 => Ok(OptionalField::ArrayFloat32Builder(ListBuilder::with_capacity(Float32Builder::new(), batch_size),)),
-                DataType::Utf8 => Ok(OptionalField::ArrayUtf8Builder(ListBuilder::with_capacity(StringBuilder::new(), batch_size),)),
-                DataType::Boolean => Ok(OptionalField::ArrayBooleanBuilder(ListBuilder::with_capacity(BooleanBuilder::new(), batch_size),)),
+                DataType::Int32 => Ok(OptionalField::ArrayInt32Builder(ListBuilder::with_capacity(Int32Builder::with_capacity(batch_size), batch_size))),
+                DataType::Float32 => Ok(OptionalField::ArrayFloat32Builder(ListBuilder::with_capacity(Float32Builder::with_capacity(batch_size), batch_size))),
+                DataType::Utf8 => Ok(OptionalField::ArrayUtf8Builder(ListBuilder::with_capacity(StringBuilder::with_capacity(batch_size, batch_size * 10), batch_size))),
+                DataType::Boolean => Ok(OptionalField::ArrayBooleanBuilder(ListBuilder::with_capacity(BooleanBuilder::with_capacity(batch_size), batch_size))),
                 _ => Err(ArrowError::SchemaError("Unsupported list inner data type".into())),
             },
-            DataType::Float32 => Ok(OptionalField::Float32Builder(Float32Builder::new())),
-            DataType::Utf8 => Ok(OptionalField::Utf8Builder(StringBuilder::new())),
-            DataType::Boolean => Ok(OptionalField::BooleanBuilder(BooleanBuilder::with_capacity(batch_size))),
+    
             _ => Err(ArrowError::SchemaError("Unsupported data type".into())),
         }
     }
