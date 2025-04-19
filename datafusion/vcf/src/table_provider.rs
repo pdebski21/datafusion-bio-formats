@@ -1,9 +1,8 @@
 use std::any::Any;
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, BooleanBuilder, Float32Array, Float32Builder, Int32Array, Int32Builder, ListBuilder, StringBuilder};
+use datafusion::arrow::array::{ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::error::ArrowError;
 use datafusion::catalog::{Session, TableProvider};
@@ -14,18 +13,21 @@ use datafusion::physical_plan::{ExecutionMode, ExecutionPlan, PlanProperties};
 use futures::executor::block_on;
 use log::debug;
 use noodles::vcf::header::Infos;
-use noodles::vcf::header::record::value::map::info::{Number, Type};
+use noodles::vcf::header::record::value::map::info::{Number, Type as InfoType};
+use noodles::vcf::header::record::value::map::format::Type as FormatType;
+use noodles::vcf::header::Formats;
 use crate::physical_exec::VcfExec;
 use crate::storage::get_header;
 
 async fn determine_schema_from_header(
     file_path: &str,
     info_fields: &Option<Vec<String>>,
-    _format_fields: &Option<Vec<String>>,
+    format_fields: &Option<Vec<String>>,
 ) -> datafusion::common::Result<SchemaRef> {
 
     let header = get_header(file_path.to_string()).await?;
     let header_infos = header.infos();
+    let header_formats = header.formats();
 
     let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
@@ -38,7 +40,7 @@ async fn determine_schema_from_header(
         Field::new("filter", DataType::Utf8, true),
     ];
 
-    match info_fields   {
+    match info_fields {
         Some(infos) => {
             for tag in infos {
                 let dtype = info_to_arrow_type(&header_infos, &tag);
@@ -49,13 +51,35 @@ async fn determine_schema_from_header(
         }
         _ => {}
     }
+
+    match format_fields {
+        Some(formats) => {
+            for tag in formats {
+                let dtype = format_to_arrow_type(&header_formats, &tag);
+                fields.push(Field::new(format!("format_{}", tag.to_lowercase()), dtype, true));
+            }
+        }
+        _ => {}
+    }
+
     let schema = Schema::new(fields);
     // println!("Schema: {:?}", schema);
     Ok(Arc::new(schema))
 }
 
-fn is_nullable(ty: &Type) -> bool {
-    !matches!(ty, Type::Flag)
+fn is_nullable(ty: &InfoType) -> bool {
+    !matches!(ty, InfoType::Flag)
+}
+
+fn format_to_arrow_type(formats: &Formats, field: &str) -> DataType {
+    let format = formats.get(field).unwrap();
+    match format.ty() {
+        FormatType::Integer => DataType::Int32,
+        FormatType::Float => DataType::Float32,
+        FormatType::Character => DataType::Utf8,
+        FormatType::String => DataType::Utf8,
+        _ => DataType::Utf8,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -129,28 +153,6 @@ impl TableProvider for VcfTableProvider {
 
         let schema = project_schema(&self.schema, projection);
 
-        // let schema = match projection {
-        //     Some(p) => {
-        //         if p.len() == 0 {
-        //             Arc::new(Schema::new(vec![
-        //                 Field::new("dummy", DataType::Null, true),
-        //             ]))
-        //         }
-        //         else {
-        //             let schema_fields = self.schema.fields();
-        //             let proj = p.clone();
-        //             let mut fields: Vec<Field> = Vec::with_capacity(proj.len());
-        //             for i in proj {
-        //                 fields.push(schema_fields[i].deref().clone());
-        //             }
-        //             Arc::new(Schema::new(fields))
-        //         }
-        //     },
-        //     None => {
-        //         self.schema.clone()
-        //     }
-        // };
-
         Ok(Arc::new(VcfExec {
             cache: PlanProperties::new( EquivalenceProperties::new(schema.clone()),
                                         Partitioning::UnknownPartitioning(1),
@@ -175,10 +177,10 @@ pub fn info_to_arrow_type(infos: &Infos, field: &str) -> DataType {
     match infos.get(field) {
         Some(t) => {
             let inner = match t.ty() {
-                Type::Integer => DataType::Int32,
-                Type::String | Type::Character => DataType::Utf8,
-                Type::Float => DataType::Float32,
-                Type::Flag => DataType::Boolean,
+                InfoType::Integer => DataType::Int32,
+                InfoType::String | InfoType::Character => DataType::Utf8,
+                InfoType::Float => DataType::Float32,
+                InfoType::Flag => DataType::Boolean,
             };
 
             match t.number() {

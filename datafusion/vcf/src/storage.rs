@@ -100,14 +100,9 @@ pub fn get_compression_type(file_path: String) -> CompressionType {
     CompressionType::from_string(file_extension.to_string())
 }
 
-pub async fn get_remote_stream_bgzf(
-    file_path: String,
-    chunk_size: usize,
-    concurrent_fetches: usize,
-) -> Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {
-    let remote_stream = StreamReader::new(
-        get_remote_stream(file_path.clone(), chunk_size, concurrent_fetches).await?,
-    );
+
+pub async fn get_remote_stream_bgzf(file_path: String, chunk_size: usize, concurrent_fetches: usize) ->  Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {
+    let remote_stream = StreamReader::new(get_remote_stream(file_path.clone(), chunk_size, concurrent_fetches).await?);
     Ok(bgzf::r#async::Reader::new(remote_stream))
 }
 
@@ -218,14 +213,8 @@ pub async fn get_remote_vcf_reader(
     reader
 }
 
-pub fn get_local_vcf_bgzf_reader(
-    file_path: String,
-    thread_num: usize,
-) -> Result<Reader<MultithreadedReader<File>>, Error> {
-    debug!(
-        "Reading VCF file from local storage with {} threads",
-        thread_num
-    );
+pub fn get_local_vcf_bgzf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
+    debug!("Reading VCF file from local storage with {} threads", thread_num);
     File::open(file_path)
         .map(|f| {
             noodles_bgzf::MultithreadedReader::with_worker_count(
@@ -236,9 +225,7 @@ pub fn get_local_vcf_bgzf_reader(
         .map(vcf::io::Reader::new)
 }
 
-pub async fn get_local_vcf_reader(
-    file_path: String,
-) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
+pub async fn get_local_vcf_reader(file_path: String) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
     debug!("Reading VCF file from local storage with async reader");
     let reader = tokio::fs::File::open(file_path)
         .await
@@ -247,10 +234,7 @@ pub async fn get_local_vcf_reader(
     Ok(reader)
 }
 
-pub async fn get_local_vcf_header(
-    file_path: String,
-    thread_num: usize,
-) -> Result<vcf::Header, Error> {
+pub async fn get_local_vcf_header(file_path: String, thread_num: usize) -> Result<vcf::Header, Error> {
     let compression_type = get_compression_type(file_path.clone());
     let header = match compression_type {
         CompressionType::BGZF | CompressionType::GZIP => {
@@ -314,12 +298,14 @@ impl VcfRemoteReader {
             }
         }
     }
+    
     pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
         match self {
             VcfRemoteReader::BGZF(reader) => reader.read_header().await,
             VcfRemoteReader::PLAIN(reader) => reader.read_header().await,
         }
     }
+
     pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
         match self {
             VcfRemoteReader::BGZF(reader) => {
@@ -360,6 +346,7 @@ impl VcfLocalReader {
             }
         }
     }
+
     pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
         match self {
             VcfLocalReader::BGZF(reader) => reader.read_header(),
@@ -373,6 +360,7 @@ impl VcfLocalReader {
             VcfLocalReader::PLAIN(reader) => reader.records().boxed(),
         }
     }
+
     pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
         match self {
             VcfLocalReader::BGZF(reader) => {
@@ -452,12 +440,14 @@ impl VcfReader {
             VcfReader::Remote(reader) => reader.read_header().await,
         }
     }
+
     pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
         match self {
             VcfReader::Local(reader) => reader.describe().await,
             VcfReader::Remote(reader) => reader.describe().await,
         }
     }
+
     pub async fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
         match self {
             VcfReader::Local(reader) => reader.read_records(),
