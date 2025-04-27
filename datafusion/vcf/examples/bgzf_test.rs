@@ -19,7 +19,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for concurrent in [8, 4, 2, 1] {
                 let start_time = Instant::now();
                 
-                // Set up S3 operator
                 let builder = S3::default()
                     .region("us-east-1")
                     .bucket("gnomad-public-us-east-1")
@@ -33,7 +32,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Testing file: {}, chunk size: {}MB, concurrent: {}", 
                          file_path, chunk_size / (1024 * 1024), concurrent);
                 
-                // Set up stream
                 let stream_start = Instant::now();
                 let stream = operator.reader_with(file_path)
                     .chunk(chunk_size)
@@ -68,7 +66,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 
-                // Check if the file has chromosome information
                 if header.contigs().is_empty() {
                     println!("Warning: No contig information in header");
                 } else {
