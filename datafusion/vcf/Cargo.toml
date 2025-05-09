@@ -10,18 +10,33 @@ async-trait.workspace = true
 
 futures = "0.3.31"
 
-noodles = { version = "0.91.0",  features = ["bam", "sam", "vcf", "bgzf", "async"] }
-noodles-bgzf = { version = "0.36.0" ,features = ["libdeflate"] }
+noodles = { version = "0.97.0",  features = ["bam", "sam", "vcf", "bgzf", "async"] }
+noodles-bgzf = { version = "0.39.0" }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "rt", "macros"] }
-object_store = {version = "0.11.2", features = ["gcp"] }
+object_store = {version = "0.12.0", features = ["gcp"] }
 tokio-util = {  version="0.7.13", features = ["io-util", "compat"] }
 bytes = "1.10.0"
-opendal = { version = "0.51.2", features = ["services-gcs", "services-s3","layers-blocking"] }
+opendal = { version = "0.53.1", features = ["services-gcs", "services-s3","layers-blocking"] }
 log = "0.4.22"
 env_logger = "0.11.6"
 async-stream = "0.3.6"
+
+exon = "0.32.4"
+
+iceberg = "0.4.0"
+iceberg-catalog-rest = "0.4.0"
+iceberg-catalog-memory = "0.4.0"  
+iceberg-datafusion = "0.4.0" 
+
+# iceberg = "0.4.0"
+# iceberg-rust = "0.7.0"
+# iceberg-datafusion = "0.4.0"
 
 [[example]]
 name = "datafusion_integration"
 # Some issue when publishing and path isn't specified, so adding here
 path = "./examples/datafusion_integration.rs"
+
+[[example]]
+name = "iceberg_integration"
+path = "./examples/iceberg_integration.rs"

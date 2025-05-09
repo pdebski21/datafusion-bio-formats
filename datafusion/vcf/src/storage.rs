@@ -2,13 +2,13 @@ use std::fs::File;
 use std::io::Error;
 use std::num::NonZero;
 use std::sync::Arc;
-use async_stream::stream;
+// use async_stream::stream;
 use bytes::Bytes;
 use datafusion::arrow;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::ipc::RecordBatch;
-use datafusion::datasource::MemTable;
+// use datafusion::arrow::ipc::RecordBatch;
+// use datafusion::datasource::MemTable;
 use futures::{stream, StreamExt};
 use futures::stream::BoxStream;
 use log::debug;
@@ -251,7 +251,6 @@ pub enum VcfRemoteReader {
     BGZF( vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>),
     PLAIN( vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>>)
 }
-
 
 
 impl VcfRemoteReader {
