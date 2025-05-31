@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "datafusion/vcf",
+]
+
+[workspace.dependencies]
+datafusion = "43.0.0"
+datafusion-execution = "43.0.0"
+async-trait = "0.1.85"
+object_store = { version = "0.11"}
+
