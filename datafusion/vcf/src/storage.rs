@@ -1,12 +1,13 @@
-use async_stream::stream;
+use std::fs::File;
+use std::io::Error;
+use std::num::NonZero;
+use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::ipc::RecordBatch;
-use datafusion::datasource::MemTable;
+use futures::{stream, StreamExt};
 use futures::stream::BoxStream;
-use futures::{StreamExt, stream};
 use log::debug;
 use noodles::vcf::io::Reader;
 use noodles::vcf::{Header, Record};
@@ -15,10 +16,6 @@ use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::{Gcs, S3};
 use opendal::{FuturesBytesStream, Operator};
-use std::fs::File;
-use std::io::Error;
-use std::num::NonZero;
-use std::sync::Arc;
 use tokio::io::BufReader;
 use tokio_util::io::StreamReader;
 
