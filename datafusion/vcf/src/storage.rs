@@ -1,13 +1,9 @@
-use std::fs::File;
-use std::io::Error;
-use std::num::NonZero;
-use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::datatypes::SchemaRef;
-use futures::{stream, StreamExt};
 use futures::stream::BoxStream;
+use futures::{StreamExt, stream};
 use log::debug;
 use noodles::vcf::io::Reader;
 use noodles::vcf::{Header, Record};
@@ -16,6 +12,10 @@ use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::{Gcs, S3};
 use opendal::{FuturesBytesStream, Operator};
+use std::fs::File;
+use std::io::Error;
+use std::num::NonZero;
+use std::sync::Arc;
 use tokio::io::BufReader;
 use tokio_util::io::StreamReader;
 
@@ -26,14 +26,6 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
-    fn get_compression_type(&self) -> String {
-        match self {
-            CompressionType::GZIP => "gz".to_string(),
-            CompressionType::BGZF => "bgz".to_string(),
-            CompressionType::NONE => "none".to_string(),
-        }
-    }
-
     fn from_string(compression_type: String) -> Self {
         match compression_type.to_lowercase().as_str() {
             "gz" => CompressionType::GZIP,
@@ -52,15 +44,6 @@ pub enum StorageType {
 }
 
 impl StorageType {
-    fn get_object_storage_type(&self) -> String {
-        match self {
-            StorageType::GCS => "gcs".to_string(),
-            StorageType::S3 => "s3".to_string(),
-            StorageType::AZBLOB => "azblob".to_string(),
-            StorageType::LOCAL => "local".to_string(),
-        }
-    }
-
     fn from_string(object_storage_type: String) -> Self {
         match object_storage_type.as_str() {
             "gs" => StorageType::GCS,
@@ -97,9 +80,14 @@ pub fn get_compression_type(file_path: String) -> CompressionType {
     CompressionType::from_string(file_extension.to_string())
 }
 
-
-pub async fn get_remote_stream_bgzf(file_path: String, chunk_size: usize, concurrent_fetches: usize) ->  Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {
-    let remote_stream = StreamReader::new(get_remote_stream(file_path.clone(), chunk_size, concurrent_fetches).await?);
+pub async fn get_remote_stream_bgzf(
+    file_path: String,
+    chunk_size: usize,
+    concurrent_fetches: usize,
+) -> Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {
+    let remote_stream = StreamReader::new(
+        get_remote_stream(file_path.clone(), chunk_size, concurrent_fetches).await?,
+    );
     Ok(bgzf::r#async::Reader::new(remote_stream))
 }
 
@@ -130,24 +118,30 @@ fn get_bucket_name(file_path: String) -> String {
     bucket_name.to_string()
 }
 
-pub async fn get_remote_stream(file_path: String, chunk_size: usize, concurrent_fetches: usize) -> Result<FuturesBytesStream, opendal::Error> {
+pub async fn get_remote_stream(
+    file_path: String,
+    chunk_size: usize,
+    concurrent_fetches: usize,
+) -> Result<FuturesBytesStream, opendal::Error> {
     let storage_type = get_storage_type(file_path.clone());
     let bucket_name = get_bucket_name(file_path.clone());
     let file_path = get_file_path(file_path.clone());
-    
+
     match storage_type {
         StorageType::S3 => {
             let builder = S3::default()
-                .region(&S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str()).await.unwrap())
+                .region(
+                    &S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str())
+                        .await
+                        .unwrap(),
+                )
                 .bucket(bucket_name.as_str())
                 .disable_ec2_metadata()
                 .allow_anonymous();
-                
+
             let operator = Operator::new(builder)?
-                .layer(TimeoutLayer::new()
-                    .with_io_timeout(std::time::Duration::from_secs(300)))  // 5 minutes
-                .layer(RetryLayer::new()
-                    .with_max_times(5))  // Retry up to 5 times
+                .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(300))) // 5 minutes
+                .layer(RetryLayer::new().with_max_times(5)) // Retry up to 5 times
                 .layer(LoggingLayer::default())
                 .finish();
 
@@ -155,7 +149,8 @@ pub async fn get_remote_stream(file_path: String, chunk_size: usize, concurrent_
             let adjusted_chunk_size = chunk_size.min(8 * 1024 * 1024); // Max 8MB chunks
             let adjusted_concurrency = concurrent_fetches.max(4); // Min 4 concurrent fetches
 
-            operator.reader_with(file_path.as_str())
+            operator
+                .reader_with(file_path.as_str())
                 .chunk(adjusted_chunk_size)
                 .concurrent(adjusted_concurrency)
                 .await?
@@ -206,12 +201,17 @@ pub async fn get_remote_vcf_reader(
             .await
             .unwrap(),
     );
-    let reader = vcf::r#async::io::Reader::new(inner);
-    reader
+    vcf::r#async::io::Reader::new(inner)
 }
 
-pub fn get_local_vcf_bgzf_reader(file_path: String, thread_num: usize) -> Result<Reader<MultithreadedReader<File>>, Error> {
-    debug!("Reading VCF file from local storage with {} threads", thread_num);
+pub fn get_local_vcf_bgzf_reader(
+    file_path: String,
+    thread_num: usize,
+) -> Result<Reader<MultithreadedReader<File>>, Error> {
+    debug!(
+        "Reading VCF file from local storage with {} threads",
+        thread_num
+    );
     File::open(file_path)
         .map(|f| {
             noodles_bgzf::MultithreadedReader::with_worker_count(
@@ -222,7 +222,9 @@ pub fn get_local_vcf_bgzf_reader(file_path: String, thread_num: usize) -> Result
         .map(vcf::io::Reader::new)
 }
 
-pub async fn get_local_vcf_reader(file_path: String) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
+pub async fn get_local_vcf_reader(
+    file_path: String,
+) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
     debug!("Reading VCF file from local storage with async reader");
     let reader = tokio::fs::File::open(file_path)
         .await
@@ -231,7 +233,10 @@ pub async fn get_local_vcf_reader(file_path: String) -> Result<vcf::r#async::io:
     Ok(reader)
 }
 
-pub async fn get_local_vcf_header(file_path: String, thread_num: usize) -> Result<vcf::Header, Error> {
+pub async fn get_local_vcf_header(
+    file_path: String,
+    thread_num: usize,
+) -> Result<vcf::Header, Error> {
     let compression_type = get_compression_type(file_path.clone());
     let header = match compression_type {
         CompressionType::BGZF | CompressionType::GZIP => {
@@ -295,7 +300,7 @@ impl VcfRemoteReader {
             }
         }
     }
-    
+
     pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
         match self {
             VcfRemoteReader::BGZF(reader) => reader.read_header().await,
@@ -473,12 +478,12 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_compression_type_get_compression_type() {
-        assert_eq!(CompressionType::GZIP.get_compression_type(), "gz");
-        assert_eq!(CompressionType::BGZF.get_compression_type(), "bgz");
-        assert_eq!(CompressionType::NONE.get_compression_type(), "none");
-    }
+    // #[test]
+    // fn test_compression_type_get_compression_type() {
+    //     assert_eq!(CompressionType::GZIP.get_compression_type(), "gz");
+    //     assert_eq!(CompressionType::BGZF.get_compression_type(), "bgz");
+    //     assert_eq!(CompressionType::NONE.get_compression_type(), "none");
+    // }
 
     #[test]
     fn test_get_file_path() {
