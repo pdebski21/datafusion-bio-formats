@@ -160,7 +160,7 @@ pub async fn get_remote_stream(
         StorageType::GCS => {
             let builder = Gcs::default()
                 .bucket(bucket_name.as_str())
-                .disable_vm_metadata()
+                .disable_ec2_metadata()
                 .allow_anonymous();
             let operator = Operator::new(builder)?
                 .layer(TimeoutLayer::new().with_io_timeout(std::time::Duration::from_secs(120)))
