@@ -460,13 +460,6 @@ mod tests {
         ));
     }
 
-    // #[test]
-    // fn test_compression_type_get_compression_type() {
-    //     assert_eq!(CompressionType::GZIP.get_compression_type(), "gz");
-    //     assert_eq!(CompressionType::BGZF.get_compression_type(), "bgz");
-    //     assert_eq!(CompressionType::NONE.get_compression_type(), "none");
-    // }
-
     #[test]
     fn test_get_file_path() {
         let file_path = "s3://bucket/path/to/file.vcf.bgz".to_string();
