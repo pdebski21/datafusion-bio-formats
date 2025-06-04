@@ -2,7 +2,7 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::storage::{StorageType, VcfLocalReader, VcfRemoteReader, get_storage_type};
+use crate::storage::{VcfLocalReader, VcfRemoteReader};
 use crate::table_provider::{OptionalField, info_to_arrow_type};
 use async_stream::__private::AsyncStream;
 use async_stream::try_stream;
@@ -12,6 +12,8 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion_bio_format_core::object_storage::get_storage_type;
+use datafusion_bio_format_core::object_storage::{ObjectStorageOptions, StorageType};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
@@ -287,12 +289,11 @@ async fn get_remote_vcf_stream(
     batch_size: usize,
     info_fields: Option<Vec<String>>,
     projection: Option<Vec<usize>>,
-    chunk_size: usize,
-    concurrent_fetches: usize,
+    object_storage_options: Option<ObjectStorageOptions>,
 ) -> datafusion::error::Result<
     AsyncStream<datafusion::error::Result<RecordBatch>, impl Future<Output = ()> + Sized>,
 > {
-    let mut reader = VcfRemoteReader::new(file_path.clone(), chunk_size, concurrent_fetches).await;
+    let mut reader = VcfRemoteReader::new(file_path.clone(), object_storage_options.unwrap()).await;
     let header = reader.read_header().await?;
     let infos = header.infos();
     let mut info_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
@@ -408,8 +409,7 @@ async fn get_stream(
     thread_num: Option<usize>,
     info_fields: Option<Vec<String>>,
     projection: Option<Vec<usize>>,
-    chunk_size: usize,
-    concurrent_fetches: usize,
+    object_storage_options: Option<ObjectStorageOptions>,
 ) -> datafusion::error::Result<SendableRecordBatchStream> {
     // Open the BGZF-indexed VCF using IndexedReader.
 
@@ -430,20 +430,18 @@ async fn get_stream(
             .await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         }
-        StorageType::GCS | StorageType::S3 => {
+        StorageType::GCS | StorageType::S3 | StorageType::AZBLOB | StorageType::HTTP => {
             let stream = get_remote_vcf_stream(
                 file_path.clone(),
                 schema.clone(),
                 batch_size,
                 info_fields,
                 projection,
-                chunk_size,
-                concurrent_fetches,
+                object_storage_options,
             )
             .await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         }
-        _ => panic!("Unsupported storage type"),
     }
 }
 
@@ -457,8 +455,7 @@ pub struct VcfExec {
     pub(crate) cache: PlanProperties,
     pub(crate) limit: Option<usize>,
     pub(crate) thread_num: Option<usize>,
-    pub(crate) chunk_size: Option<usize>,
-    pub(crate) concurrent_fetches: Option<usize>,
+    pub(crate) object_storage_options: Option<ObjectStorageOptions>,
 }
 
 impl Debug for VcfExec {
@@ -513,8 +510,7 @@ impl ExecutionPlan for VcfExec {
             self.thread_num,
             self.info_fields.clone(),
             self.projection.clone(),
-            self.chunk_size.unwrap_or(64),
-            self.concurrent_fetches.unwrap_or(8),
+            self.object_storage_options.clone(),
         );
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
