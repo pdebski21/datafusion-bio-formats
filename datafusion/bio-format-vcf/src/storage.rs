@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_bio_format_core::object_storage::StorageType;
 use datafusion_bio_format_core::object_storage::{CompressionType, ObjectStorageOptions};
 use datafusion_bio_format_core::object_storage::{
-    get_compression_type, get_remote_stream, get_remote_stream_bgzf, get_storage_type,
+    get_compression_type, get_remote_stream, get_remote_stream_bgzf_async, get_storage_type,
 };
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
@@ -27,7 +27,7 @@ pub async fn get_remote_vcf_bgzf_reader(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
 ) -> vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>> {
-    let inner = get_remote_stream_bgzf(file_path.clone(), object_storage_options)
+    let inner = get_remote_stream_bgzf_async(file_path.clone(), object_storage_options)
         .await
         .unwrap();
     let reader = vcf::r#async::io::Reader::new(inner);
@@ -81,7 +81,7 @@ pub async fn get_local_vcf_header(
 ) -> Result<vcf::Header, Error> {
     let compression_type = get_compression_type(file_path.clone(), None);
     let header = match compression_type {
-        CompressionType::BGZF | CompressionType::GZIP => {
+        CompressionType::BGZF => {
             let mut reader = get_local_vcf_bgzf_reader(file_path, thread_num)?;
             reader.read_header()?
         }
@@ -107,7 +107,7 @@ pub async fn get_remote_vcf_header(
         object_storage_options.clone().compression_type,
     );
     let header = match compression_type {
-        CompressionType::BGZF | CompressionType::GZIP => {
+        CompressionType::BGZF => {
             let mut reader = get_remote_vcf_bgzf_reader(file_path, object_storage_options).await;
             reader.read_header().await?
         }
@@ -145,7 +145,7 @@ impl VcfRemoteReader {
             object_storage_options.clone().compression_type,
         );
         match compression_type {
-            CompressionType::BGZF | CompressionType::GZIP => {
+            CompressionType::BGZF => {
                 let reader = get_remote_vcf_bgzf_reader(file_path, object_storage_options).await;
                 VcfRemoteReader::BGZF(reader)
             }
@@ -194,7 +194,7 @@ impl VcfLocalReader {
     pub async fn new(file_path: String, thread_num: usize) -> Self {
         let compression_type = get_compression_type(file_path.clone(), None);
         match compression_type {
-            CompressionType::BGZF | CompressionType::GZIP => {
+            CompressionType::BGZF => {
                 let reader = get_local_vcf_bgzf_reader(file_path, thread_num).unwrap();
                 VcfLocalReader::BGZF(reader)
             }

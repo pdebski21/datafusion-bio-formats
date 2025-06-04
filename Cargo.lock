@@ -894,6 +894,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-bio-format-bed"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "bytes",
+ "datafusion",
+ "datafusion-bio-format-core",
+ "datafusion-execution",
+ "futures",
+ "log",
+ "noodles",
+ "noodles-bgzf",
+ "opendal",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "datafusion-bio-format-core"
 version = "0.1.0"
 dependencies = [
@@ -906,6 +925,14 @@ dependencies = [
  "tokio-util",
  "url",
 ]
+
+[[package]]
+name = "datafusion-bio-format-fastq"
+version = "0.1.0"
+
+[[package]]
+name = "datafusion-bio-format-gff"
+version = "0.1.0"
 
 [[package]]
 name = "datafusion-bio-format-vcf"
@@ -2210,6 +2237,7 @@ checksum = "74eea88cacba7e16cb6aff1bc3e077f3f9e036e59b9107a8415bf9242d0c2d97"
 dependencies = [
  "noodles-bam",
  "noodles-bcf",
+ "noodles-bed",
  "noodles-bgzf",
  "noodles-cram",
  "noodles-csi",
@@ -2256,6 +2284,18 @@ dependencies = [
  "noodles-vcf",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "noodles-bed"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48a1daed588234e40eebfe1766368a8594244b2ca312719d46e298f1933083b2"
+dependencies = [
+ "bstr",
+ "lexical-core",
+ "memchr",
+ "noodles-core",
 ]
 
 [[package]]

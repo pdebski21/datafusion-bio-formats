@@ -1,6 +1,6 @@
 use log;
 use noodles::bgzf;
-use noodles_bgzf::AsyncReader;
+use noodles_bgzf::{AsyncReader, Reader};
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::{Azblob, Gcs, S3};
 use opendal::{FuturesBytesStream, Operator};
@@ -38,7 +38,6 @@ impl Display for ObjectStorageOptions {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompressionType {
-    GZIP,
     BGZF,
     NONE,
     AUTO,
@@ -47,7 +46,7 @@ pub enum CompressionType {
 impl CompressionType {
     pub fn from_string(compression_type: String) -> Self {
         match compression_type.to_lowercase().as_str() {
-            "gz" => CompressionType::GZIP,
+            "gz" => CompressionType::BGZF,
             "bgz" => CompressionType::BGZF,
             "none" => CompressionType::NONE,
             "auto" => CompressionType::AUTO,
@@ -103,6 +102,7 @@ pub fn get_compression_type(
     if file_path.to_lowercase().ends_with(".vcf")
         || file_path.to_lowercase().ends_with(".fastq")
         || file_path.to_lowercase().ends_with(".gff3")
+        || file_path.to_lowercase().ends_with(".gff")
         || file_path.to_lowercase().ends_with(".bed")
     {
         //FIXME: generalize to other formats
@@ -113,7 +113,7 @@ pub fn get_compression_type(
     CompressionType::from_string(file_extension.to_string())
 }
 
-pub async fn get_remote_stream_bgzf(
+pub async fn get_remote_stream_bgzf_async(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
 ) -> Result<AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>, opendal::Error> {

@@ -1,0 +1,19 @@
+[package]
+name = "datafusion-bio-format-bed"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+datafusion.workspace = true
+datafusion-execution.workspace = true
+async-trait.workspace = true
+opendal.workspace = true
+noodles.workspace = true
+noodles-bgzf.workspace = true
+tokio-util.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+datafusion-bio-format-core = {path = "../bio-format-core"}
+futures = "0.3.31"
+log = "0.4.27"
+async-stream = "0.3.6"
