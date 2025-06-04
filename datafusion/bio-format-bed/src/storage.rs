@@ -12,43 +12,41 @@ use noodles::bed::Record;
 use noodles_bgzf::{AsyncReader, MultithreadedReader};
 use opendal::FuturesBytesStream;
 use std::fs::File;
-use std::io::{BufReader, Error};
+use std::io::{BufRead, BufReader, Cursor, Error};
 use std::num::NonZero;
+use tokio::io::AsyncReadExt;
+use tokio::runtime::Handle;
+use tokio::task::spawn_blocking;
 use tokio_util::io::{StreamReader, SyncIoBridge};
 
 pub async fn get_remote_bed_bgzf_reader<const N: usize>(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
-) -> Result<
-    bed::io::Reader<
-        N,
-        BufReader<SyncIoBridge<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>>,
-    >,
-    Error,
-> {
-    let inner = get_remote_stream_bgzf_async(file_path.clone(), object_storage_options).await?;
-    let sync_bridge = SyncIoBridge::new(inner);
-    let buf_reader = BufReader::new(sync_bridge);
-    let mut reader = bed::io::Reader::<N, _>::new(buf_reader);
+) -> Result<bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>, Error> {
+    let mut inner = get_remote_stream_bgzf_async(file_path.clone(), object_storage_options).await?;
+    let mut buffer = Vec::new();
+    inner.read_to_end(&mut buffer).await?;
+    let cursor = Cursor::new(buffer);
+
+    // Create a buffered reader
+    let buf_reader = BufReader::new(cursor);
+    let reader = bed::io::Reader::<N, _>::new(buf_reader);
     Ok(reader)
 }
 
 pub async fn get_remote_bed_reader<const N: usize>(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
-) -> Result<
-    bed::io::Reader<
-        N,
-        BufReader<SyncIoBridge<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>>,
-    >,
-    Error,
-> {
+) -> Result<bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>, Error> {
     let stream = get_remote_stream(file_path.clone(), object_storage_options).await?;
-    let stream_reader = StreamReader::new(stream);
-    let async_reader = AsyncReader::new(stream_reader);
-    let sync_reader = SyncIoBridge::new(async_reader);
-    let buf_reader = BufReader::new(sync_reader);
-    let mut reader = bed::io::Reader::<N, _>::new(buf_reader);
+    let mut stream_reader = StreamReader::new(stream);
+    let mut buffer = Vec::new();
+    stream_reader.read_to_end(&mut buffer).await?;
+    let cursor = Cursor::new(buffer);
+
+    // Create a buffered reader
+    let buf_reader = BufReader::new(cursor);
+    let reader = bed::io::Reader::<N, _>::new(buf_reader);
     Ok(reader)
 }
 
@@ -57,7 +55,7 @@ pub fn get_local_bed_bgzf_reader<const N: usize>(
     thread_num: usize,
 ) -> Result<noodles::bed::Reader<N, MultithreadedReader<File>>, Error> {
     debug!(
-        "Reading VCF file from local storage with {} threads",
+        "Reading BED file from local storage with {} threads",
         thread_num
     );
     File::open(file_path)
@@ -73,25 +71,15 @@ pub fn get_local_bed_bgzf_reader<const N: usize>(
 pub fn get_local_bed_reader<const N: usize>(
     file_path: String,
 ) -> Result<bed::Reader<N, BufReader<File>>, Error> {
-    debug!("Reading VCF file from local storage with async reader");
+    debug!("Reading BED file from local storage with sync reader");
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
     Ok(bed::io::Reader::<N, _>::new(reader))
 }
 
 pub enum BedRemoteReader<const N: usize> {
-    BGZF(
-        bed::io::Reader<
-            N,
-            BufReader<SyncIoBridge<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>>,
-        >,
-    ),
-    PLAIN(
-        bed::io::Reader<
-            N,
-            BufReader<SyncIoBridge<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>>,
-        >,
-    ),
+    BGZF(bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>),
+    PLAIN(bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>),
 }
 
 macro_rules! impl_bed_remote_reader {
@@ -118,7 +106,7 @@ macro_rules! impl_bed_remote_reader {
                 }
             }
             impl BedRemoteReader<$n> {
-                pub fn get_reader(&mut self) -> &mut bed::io::Reader<$n, BufReader<SyncIoBridge<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>>> {
+                pub fn get_reader(&mut self) -> &mut bed::io::Reader<$n, BufReader<Cursor<Vec<u8>>>> {
                     match self {
                         BedRemoteReader::BGZF(reader) => reader,
                         BedRemoteReader::PLAIN(reader) => reader,

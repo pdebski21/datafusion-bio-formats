@@ -54,6 +54,20 @@ impl CompressionType {
         }
     }
 }
+
+impl Default for ObjectStorageOptions {
+    fn default() -> Self {
+        ObjectStorageOptions {
+            chunk_size: Some(8),                           // Default chunk size in MB
+            concurrent_fetches: Some(1),                   // Default concurrent fetches
+            allow_anonymous: true, // Default to not allowing anonymous access
+            enable_request_payer: false, // Default to not enabling request payer
+            max_retries: Some(5),  // Default max retries
+            timeout: Some(300),    // Default timeout in seconds
+            compression_type: Some(CompressionType::AUTO), // Default compression type
+        }
+    }
+}
 #[derive(Debug)]
 pub enum StorageType {
     GCS,
