@@ -1,85 +1,76 @@
+use crate::async_reader;
 use async_stream::try_stream;
 use bytes::Bytes;
 use datafusion_bio_format_core::object_storage::{
     CompressionType, ObjectStorageOptions, get_compression_type, get_remote_stream,
     get_remote_stream_bgzf_async,
 };
-use futures::StreamExt;
 use futures::stream::BoxStream;
-use log::{debug, info};
-use noodles::bed;
-use noodles::bed::Record;
-use noodles_bgzf::{AsyncReader, MultithreadedReader};
+use futures::{Stream, StreamExt};
+use log::{debug, error, info};
+use noodles::bgzf;
+use noodles_bed;
+use noodles_bed::Record;
+use noodles_bgzf::MultithreadedReader;
 use opendal::FuturesBytesStream;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Error};
+use std::io::Error;
 use std::num::NonZero;
-use tokio::io::AsyncReadExt;
-use tokio::runtime::Handle;
-use tokio::task::spawn_blocking;
-use tokio_util::io::{StreamReader, SyncIoBridge};
+use tokio_util::io::StreamReader;
 
 pub async fn get_remote_bed_bgzf_reader<const N: usize>(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
-) -> Result<bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>, Error> {
-    let mut inner = get_remote_stream_bgzf_async(file_path.clone(), object_storage_options).await?;
-    let mut buffer = Vec::new();
-    inner.read_to_end(&mut buffer).await?;
-    let cursor = Cursor::new(buffer);
-
-    // Create a buffered reader
-    let buf_reader = BufReader::new(cursor);
-    let reader = bed::io::Reader::<N, _>::new(buf_reader);
+) -> Result<
+    async_reader::Reader<bgzf::r#async::Reader<StreamReader<FuturesBytesStream, Bytes>>, N>,
+    Error,
+> {
+    let inner = get_remote_stream_bgzf_async(file_path.clone(), object_storage_options).await?;
+    let reader = async_reader::Reader::new(inner);
     Ok(reader)
 }
 
 pub async fn get_remote_bed_reader<const N: usize>(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
-) -> Result<bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>, Error> {
+) -> Result<async_reader::Reader<StreamReader<FuturesBytesStream, Bytes>, N>, Error> {
     let stream = get_remote_stream(file_path.clone(), object_storage_options).await?;
-    let mut stream_reader = StreamReader::new(stream);
-    let mut buffer = Vec::new();
-    stream_reader.read_to_end(&mut buffer).await?;
-    let cursor = Cursor::new(buffer);
-
-    // Create a buffered reader
-    let buf_reader = BufReader::new(cursor);
-    let reader = bed::io::Reader::<N, _>::new(buf_reader);
+    let reader = async_reader::Reader::new(StreamReader::new(stream));
     Ok(reader)
 }
 
 pub fn get_local_bed_bgzf_reader<const N: usize>(
     file_path: String,
     thread_num: usize,
-) -> Result<noodles::bed::Reader<N, MultithreadedReader<File>>, Error> {
+) -> Result<noodles_bed::io::Reader<N, MultithreadedReader<File>>, Error> {
     debug!(
-        "Reading BED file from local storage with {} threads",
+        "Reading VCF file from local storage with {} threads",
         thread_num
     );
-    File::open(file_path)
+    let reader = File::open(file_path)
         .map(|f| {
             noodles_bgzf::MultithreadedReader::with_worker_count(
                 NonZero::new(thread_num).unwrap(),
                 f,
             )
         })
-        .map(bed::io::Reader::<N, _>::new)
+        .map(noodles_bed::io::Reader::new);
+    reader
 }
 
 pub fn get_local_bed_reader<const N: usize>(
     file_path: String,
-) -> Result<bed::Reader<N, BufReader<File>>, Error> {
+) -> Result<noodles_bed::io::Reader<N, std::io::BufReader<File>>, Error> {
     debug!("Reading BED file from local storage with sync reader");
-    let file = File::open(file_path)?;
-    let reader = BufReader::new(file);
-    Ok(bed::io::Reader::<N, _>::new(reader))
+    let reader = File::open(file_path)
+        .map(|f| std::io::BufReader::new(f))
+        .map(noodles_bed::io::Reader::new);
+    reader
 }
 
 pub enum BedRemoteReader<const N: usize> {
-    BGZF(bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>),
-    PLAIN(bed::io::Reader<N, BufReader<Cursor<Vec<u8>>>>),
+    BGZF(async_reader::Reader<bgzf::r#async::Reader<StreamReader<FuturesBytesStream, Bytes>>, N>),
+    PLAIN(async_reader::Reader<StreamReader<FuturesBytesStream, Bytes>, N>),
 }
 
 macro_rules! impl_bed_remote_reader {
@@ -104,33 +95,87 @@ macro_rules! impl_bed_remote_reader {
                         _ => panic!("Compression type not supported."),
                     }
                 }
-            }
-            impl BedRemoteReader<$n> {
-                pub fn get_reader(&mut self) -> &mut bed::io::Reader<$n, BufReader<Cursor<Vec<u8>>>> {
+
+                pub async fn records(&mut self) -> BoxStream<'_, Result<Record<$n>, Error>> {
                     match self {
-                        BedRemoteReader::BGZF(reader) => reader,
-                        BedRemoteReader::PLAIN(reader) => reader,
+                        BedRemoteReader::BGZF(reader) => reader.records().boxed(),
+                        BedRemoteReader::PLAIN(reader) => reader.records().boxed(),
                     }
                 }
-                pub async fn read_records_stream(&mut self) -> BoxStream<'_, Result<bed::Record<$n>, Error>> {
-                    let reader = self.get_reader();
-                    try_stream! {
-                        loop {
-                            let mut record = bed::Record::default();
-                            match reader.read_record(&mut record) {
-                                Ok(0) => break, // EOF
-                                Ok(_) => yield record,
-                                Err(e) => Err(e)?,
-                            }
-                        }
-                    }.boxed()
-    }
 
+                pub async fn lines(&mut self) -> BoxStream<'_, Result<String, Error>> {
+                    match self {
+                        BedRemoteReader::BGZF(reader) => reader.lines().boxed(),
+                        BedRemoteReader::PLAIN(reader) => reader.lines().boxed(),
+                    }
+                }
             }
+        )*
+    };
+}
+//
+// // Generate implementations for N = 3, 4, 5, 6
+impl_bed_remote_reader!(3, 4, 5, 6);
 
+pub enum BedLocalReader<const N: usize> {
+    BGZF(noodles_bed::io::Reader<N, MultithreadedReader<File>>),
+    PLAIN(noodles_bed::io::Reader<N, std::io::BufReader<File>>),
+}
+
+macro_rules! impl_bed_local_reader {
+    ($($n:expr),*) => {
+        $(
+            impl BedLocalReader<$n> {
+                pub async fn new(file_path: String, thread_num: usize) -> Result<Self, Error> {
+                    info!("Creating local BED reader: {}", file_path);
+                    let compression_type = get_compression_type(
+                        file_path.clone(),None
+                    );
+                    match compression_type {
+                        CompressionType::BGZF => {
+                            let reader = get_local_bed_bgzf_reader::<$n>(file_path, thread_num)?;
+                            Ok(BedLocalReader::BGZF(reader))
+                        }
+                        CompressionType::NONE => {
+                            let reader = get_local_bed_reader::<$n>(file_path)?;
+                            Ok(BedLocalReader::PLAIN(reader))
+                        }
+                        _ => panic!("Compression type not supported."),
+                    }
+                }
+
+                pub fn records(&mut self) -> impl Stream<Item = Result<Record<$n>, Error>> + '_ {
+                    match self {
+                        BedLocalReader::BGZF(reader) => {
+                            try_stream! {
+                                loop{
+                                    let mut record = noodles_bed::Record::<$n>::default();
+                                    match reader.read_record(&mut record) {
+                                        Ok(0) => break, // EOF
+                                        Ok(_) => yield record,
+                                        _ => error!("Error reading record from BED file"),
+                                    }
+                                }
+                            }.boxed()
+                        },
+                        BedLocalReader::PLAIN(reader) => {
+                            try_stream! {
+                                loop{
+                                    let mut record = noodles_bed::Record::<$n>::default();
+                                    match reader.read_record(&mut record) {
+                                        Ok(0) => break, // EOF
+                                        Ok(_) => yield record,
+                                        _ => error!("Error reading record from BED file"),
+                                    }
+                                }
+                            }.boxed()
+                        },
+                    }
+                }
+            }
         )*
     };
 }
 
 // Generate implementations for N = 3, 4, 5, 6
-impl_bed_remote_reader!(3, 4, 5, 6);
+impl_bed_local_reader!(3, 4, 5, 6);

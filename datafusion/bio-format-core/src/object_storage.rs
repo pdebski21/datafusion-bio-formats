@@ -1,6 +1,6 @@
 use log;
 use noodles::bgzf;
-use noodles_bgzf::{AsyncReader, Reader};
+use noodles_bgzf::AsyncReader;
 use opendal::layers::{LoggingLayer, RetryLayer, TimeoutLayer};
 use opendal::services::{Azblob, Gcs, S3};
 use opendal::{FuturesBytesStream, Operator};

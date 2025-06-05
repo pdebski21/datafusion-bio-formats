@@ -1,4 +1,2 @@
+mod async_reader;
 pub mod storage;
-
-#[cfg(test)]
-mod tests {}
