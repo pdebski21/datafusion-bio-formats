@@ -14,7 +14,7 @@ datafusion-bio-format-core = {path = "../bio-format-core"}
 noodles-fastq = {version = "0.19.0", features = ["async"]}
 futures.workspace = true
 futures-util.workspace = true
-async-compression = "0.4.19"
+async-compression.workspace = true
 
 [[example]]
 name = "test_reader"

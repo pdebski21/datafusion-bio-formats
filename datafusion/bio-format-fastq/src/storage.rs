@@ -5,7 +5,7 @@ use datafusion_bio_format_core::object_storage::{
     get_remote_stream_bgzf_async, get_remote_stream_gz_async,
 };
 use futures_util::stream::BoxStream;
-use futures_util::{FutureExt, StreamExt, stream};
+use futures_util::{StreamExt, stream};
 use noodles::bgzf;
 use noodles_fastq as fastq;
 use noodles_fastq::Record;
@@ -13,7 +13,7 @@ use noodles_fastq::io::Reader;
 use opendal::FuturesBytesStream;
 use std::fs::File;
 use std::io::{BufReader, Error};
-use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::io::StreamReader;
 
 pub async fn get_remote_fastq_bgzf_reader(
     file_path: String,
@@ -78,7 +78,6 @@ pub fn get_local_fastq_reader(file_path: String) -> Result<Reader<BufReader<File
 
 pub async fn get_local_fastq_gz_reader(
     file_path: String,
-    thread_num: usize,
 ) -> Result<
     fastq::r#async::io::Reader<
         tokio::io::BufReader<GzipDecoder<tokio::io::BufReader<tokio::fs::File>>>,
@@ -165,7 +164,7 @@ impl FastqLocalReader {
             }
             CompressionType::GZIP => {
                 // GZIP is treated as BGZF for local files
-                let reader = get_local_fastq_gz_reader(file_path, thread_num).await?;
+                let reader = get_local_fastq_gz_reader(file_path).await?;
                 Ok(FastqLocalReader::GZIP(reader))
             }
             CompressionType::NONE => {
