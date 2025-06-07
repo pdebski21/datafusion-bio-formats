@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 
-members = [ "datafusion/bio-format-bed",
+members = [ "datafusion/bio-format-bam", "datafusion/bio-format-bed",
     "datafusion/bio-format-core", "datafusion/bio-format-fastq", "datafusion/bio-format-gff",
-    "datafusion/bio-format-vcf",
+    "datafusion/bio-format-vcf", "datafusion/bio-format-bam",
 ]
 
 [workspace.dependencies]
@@ -17,4 +17,7 @@ noodles-bgzf = { version = "0.36.0",features = ["libdeflate"] }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "rt", "macros"] }
 tokio-util = {  version="0.7.13", features = ["io-util", "compat"] }
 bytes = "1.10.0"
+futures = "0.3.31"
+async-stream = "0.3.6"
+futures-util = "0.3.31"
 

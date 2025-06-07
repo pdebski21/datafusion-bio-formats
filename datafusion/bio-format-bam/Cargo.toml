@@ -1,5 +1,5 @@
 [package]
-name = "datafusion-bio-format-fastq"
+name = "datafusion-bio-format-bam"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,15 +7,13 @@ edition = "2024"
 datafusion.workspace = true
 opendal.workspace = true
 noodles.workspace = true
+noodles-bgzf.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true
 bytes.workspace = true
 datafusion-bio-format-core = {path = "../bio-format-core"}
-noodles-fastq = {version = "0.19.0", features = ["async"]}
 futures.workspace = true
 futures-util.workspace = true
+noodles-bam = {version = "0.81.0" , features = ["async"]}
 
-[[example]]
-name = "test_reader"
-# Some issue when publishing and path isn't specified, so adding here
-path = "./examples/test_reader.rs"
+#[[example]]

@@ -18,10 +18,8 @@ futures = "0.3.31"
 log = "0.4.27"
 async-stream = "0.3.6"
 env_logger = "0.11.8"
-futures-util = "0.3.31"
-pin-project = "1.1.10"
 noodles-bed = "0.26.0"
-bstr = "1.12.0"
+
 [[example]]
 name = "test_reader"
 # Some issue when publishing and path isn't specified, so adding here
