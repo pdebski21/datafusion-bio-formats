@@ -16,4 +16,7 @@ futures.workspace = true
 futures-util.workspace = true
 noodles-bam = {version = "0.81.0" , features = ["async"]}
 
-#[[example]]
+[[example]]
+name = "test_reader"
+
+path = "./examples/test_reader.rs"

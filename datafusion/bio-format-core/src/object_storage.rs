@@ -1,3 +1,4 @@
+use async_compression::tokio::bufread::GzipDecoder;
 use log;
 use noodles::bgzf;
 use noodles_bgzf::AsyncReader;
@@ -38,6 +39,7 @@ impl Display for ObjectStorageOptions {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompressionType {
+    GZIP,
     BGZF,
     NONE,
     AUTO,
@@ -46,7 +48,7 @@ pub enum CompressionType {
 impl CompressionType {
     pub fn from_string(compression_type: String) -> Self {
         match compression_type.to_lowercase().as_str() {
-            "gz" => CompressionType::BGZF,
+            "gz" => CompressionType::GZIP,
             "bgz" => CompressionType::BGZF,
             "none" => CompressionType::NONE,
             "auto" => CompressionType::AUTO,
@@ -134,6 +136,18 @@ pub async fn get_remote_stream_bgzf_async(
     let remote_stream =
         StreamReader::new(get_remote_stream(file_path.clone(), object_storage_options).await?);
     Ok(bgzf::r#async::Reader::new(remote_stream))
+}
+
+pub async fn get_remote_stream_gz_async(
+    file_path: String,
+    object_storage_options: ObjectStorageOptions,
+) -> Result<
+    async_compression::tokio::bufread::GzipDecoder<StreamReader<FuturesBytesStream, bytes::Bytes>>,
+    opendal::Error,
+> {
+    let remote_stream =
+        StreamReader::new(get_remote_stream(file_path.clone(), object_storage_options).await?);
+    Ok(GzipDecoder::new(remote_stream))
 }
 
 pub fn get_storage_type(file_path: String) -> StorageType {
