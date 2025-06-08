@@ -1,5 +1,12 @@
+use crate::physcial_exec::GffExec;
 use crate::storage::{GffLocalReader, GffRemoteReader};
+use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::datasource::TableType;
+use datafusion::logical_expr::Expr;
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::{ExecutionMode, ExecutionPlan, PlanProperties};
 use datafusion_bio_format_core::object_storage::{
     ObjectStorageOptions, StorageType, get_storage_type,
 };
@@ -8,9 +15,10 @@ use futures_util::StreamExt;
 use log::debug;
 use noodles_gff::feature::record_buf::Attributes;
 use noodles_gff::feature::record_buf::attributes::field::Value;
+use std::any::Any;
 use std::sync::Arc;
 
-fn get_attribute_names_and_types(attributes: &Attributes) -> (Vec<String>, Vec<DataType>) {
+pub fn get_attribute_names_and_types(attributes: &Attributes) -> (Vec<String>, Vec<DataType>) {
     let mut attribute_names = Vec::new();
     let mut attribute_types = Vec::new();
 
@@ -40,7 +48,7 @@ fn determine_schema(attributes: &Attributes) -> datafusion::common::Result<Schem
         Field::new("source", DataType::Utf8, false),
         Field::new("score", DataType::Float32, true),
         Field::new("strand", DataType::Utf8, false),
-        Field::new("phase", DataType::Utf8, true),
+        Field::new("phase", DataType::UInt32, true), //FIXME:: can be downcasted to 8
     ];
 
     let attributes = get_attribute_names_and_types(attributes);
@@ -56,6 +64,7 @@ fn determine_schema(attributes: &Attributes) -> datafusion::common::Result<Schem
 #[derive(Clone, Debug)]
 pub struct GffTableProvider {
     file_path: String,
+    attributes: Attributes,
     schema: SchemaRef,
     thread_num: Option<usize>,
     object_storage_options: Option<ObjectStorageOptions>,
@@ -89,9 +98,69 @@ impl GffTableProvider {
         let schema = determine_schema(&attributes)?;
         Ok(Self {
             file_path,
+            attributes,
             schema,
             thread_num,
             object_storage_options,
         })
+    }
+}
+
+#[async_trait]
+impl TableProvider for GffTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+        // todo!()
+    }
+
+    fn schema(&self) -> SchemaRef {
+        debug!("VcfTableProvider::schema");
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+        // todo!()
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        limit: Option<usize>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        debug!("GffTableProvider::scan");
+
+        fn project_schema(schema: &SchemaRef, projection: Option<&Vec<usize>>) -> SchemaRef {
+            match projection {
+                Some(indices) if indices.is_empty() => {
+                    Arc::new(Schema::new(vec![Field::new("dummy", DataType::Null, true)]))
+                }
+                Some(indices) => {
+                    let projected_fields: Vec<Field> =
+                        indices.iter().map(|&i| schema.field(i).clone()).collect();
+                    Arc::new(Schema::new(projected_fields))
+                }
+                None => schema.clone(),
+            }
+        }
+
+        let schema = project_schema(&self.schema, projection);
+
+        Ok(Arc::new(GffExec {
+            cache: PlanProperties::new(
+                EquivalenceProperties::new(schema.clone()),
+                Partitioning::UnknownPartitioning(1),
+                ExecutionMode::Bounded,
+            ),
+            file_path: self.file_path.clone(),
+            schema: schema.clone(),
+            attributes: self.attributes.clone(),
+            projection: projection.cloned(),
+            limit,
+            thread_num: self.thread_num,
+            object_storage_options: self.object_storage_options.clone(),
+        }))
     }
 }

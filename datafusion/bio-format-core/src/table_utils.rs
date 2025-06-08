@@ -1,5 +1,5 @@
 use datafusion::arrow::array::{
-    ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder, StringBuilder,
+    Array, ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder, StringBuilder,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::error::ArrowError;
@@ -150,4 +150,12 @@ impl OptionalField {
             OptionalField::ArrayBooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
         }
     }
+}
+
+pub fn builders_to_arrays(builders: &mut Vec<OptionalField>) -> Vec<Arc<dyn Array>> {
+    builders
+        .iter_mut()
+        .map(|f| f.finish())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
 }
