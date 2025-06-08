@@ -4,11 +4,13 @@ use datafusion_bio_format_core::object_storage::{
     CompressionType, ObjectStorageOptions, get_compression_type, get_remote_stream,
     get_remote_stream_bgzf_async, get_remote_stream_gz_async,
 };
+use futures::executor::block_on;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, stream};
 use noodles::bgzf;
 use noodles_gff as gff;
-use noodles_gff::feature::RecordBuf;
+use noodles_gff::feature::record_buf::Attributes;
+use noodles_gff::feature::{Record, RecordBuf};
 use noodles_gff::io::Reader;
 use opendal::FuturesBytesStream;
 use std::fs::File;
@@ -100,6 +102,16 @@ impl GffRemoteReader {
             GffRemoteReader::PLAIN(reader) => reader.record_bufs().boxed(),
         }
     }
+    pub async fn get_attributes(&mut self) -> Attributes {
+        match self {
+            GffRemoteReader::BGZF(reader) => reader.record_bufs().next().await.unwrap(),
+            GffRemoteReader::GZIP(reader) => reader.record_bufs().next().await.unwrap(),
+            GffRemoteReader::PLAIN(reader) => reader.record_bufs().next().await.unwrap(),
+        }
+        .unwrap()
+        .attributes()
+        .clone()
+    }
 }
 
 pub fn get_local_gff_bgzf_reader(
@@ -184,5 +196,16 @@ impl GffLocalReader {
             GffLocalReader::GZIP(reader) => reader.record_bufs().boxed(),
             GffLocalReader::PLAIN(reader) => stream::iter(reader.record_bufs()).boxed(),
         }
+    }
+
+    pub async fn get_attributes(&mut self) -> Attributes {
+        match self {
+            GffLocalReader::BGZF(reader) => reader.record_bufs().next().unwrap(),
+            GffLocalReader::GZIP(reader) => reader.record_bufs().next().await.unwrap(),
+            GffLocalReader::PLAIN(reader) => reader.record_bufs().next().unwrap(),
+        }
+        .unwrap()
+        .attributes()
+        .clone()
     }
 }

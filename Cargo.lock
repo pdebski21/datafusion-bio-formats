@@ -989,6 +989,8 @@ name = "datafusion-bio-format-gff"
 version = "0.1.0"
 dependencies = [
  "async-compression",
+ "async-stream",
+ "async-trait",
  "bytes",
  "datafusion",
  "datafusion-bio-format-core",

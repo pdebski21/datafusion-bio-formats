@@ -10,11 +10,14 @@ noodles.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true
 bytes.workspace = true
+async-compression.workspace = true
+async-stream.workspace = true
 datafusion-bio-format-core = {path = "../bio-format-core"}
 noodles-fastq = {version = "0.19.0", features = ["async"]}
 futures.workspace = true
 futures-util.workspace = true
-async-compression.workspace = true
+async-trait.workspace = true
+
 noodles-gff = {version = "0.50.0", features = ["async"]}
 log = "0.4.27"
 
