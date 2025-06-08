@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+datafusion-execution.workspace = true
+datafusion.workspace = true
 opendal.workspace = true
 noodles.workspace = true
 noodles-bgzf.workspace = true

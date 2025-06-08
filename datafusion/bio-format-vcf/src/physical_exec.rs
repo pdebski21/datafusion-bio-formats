@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::storage::{VcfLocalReader, VcfRemoteReader};
-use crate::table_provider::{OptionalField, info_to_arrow_type};
+use crate::table_provider::info_to_arrow_type;
 use async_stream::__private::AsyncStream;
 use async_stream::try_stream;
 use datafusion::arrow::array::{Array, Float64Array, NullArray, StringArray, UInt32Array};
@@ -14,6 +14,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_bio_format_core::object_storage::get_storage_type;
 use datafusion_bio_format_core::object_storage::{ObjectStorageOptions, StorageType};
+use datafusion_bio_format_core::table_utils::OptionalField;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
@@ -430,7 +431,7 @@ async fn get_stream(
             .await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         }
-        StorageType::GCS | StorageType::S3 | StorageType::AZBLOB | StorageType::HTTP => {
+        StorageType::GCS | StorageType::S3 | StorageType::AZBLOB => {
             let stream = get_remote_vcf_stream(
                 file_path.clone(),
                 schema.clone(),
@@ -442,6 +443,7 @@ async fn get_stream(
             .await?;
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema_ref, stream)))
         }
+        _ => unimplemented!("Unsupported storage type: {:?}", store_type),
     }
 }
 
