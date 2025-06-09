@@ -1,9 +1,10 @@
+use async_compression::tokio::bufread::GzipDecoder;
 use bytes::Bytes;
 use datafusion::arrow;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion_bio_format_core::object_storage::StorageType;
 use datafusion_bio_format_core::object_storage::{CompressionType, ObjectStorageOptions};
+use datafusion_bio_format_core::object_storage::{StorageType, get_remote_stream_gz_async};
 use datafusion_bio_format_core::object_storage::{
     get_compression_type, get_remote_stream, get_remote_stream_bgzf_async, get_storage_type,
 };
@@ -32,6 +33,24 @@ pub async fn get_remote_vcf_bgzf_reader(
         .unwrap();
     let reader = vcf::r#async::io::Reader::new(inner);
     reader
+}
+
+pub async fn get_remote_vcf_gz_reader(
+    file_path: String,
+    object_storage_options: ObjectStorageOptions,
+) -> Result<
+    vcf::r#async::io::Reader<
+        tokio::io::BufReader<
+            async_compression::tokio::bufread::GzipDecoder<StreamReader<FuturesBytesStream, Bytes>>,
+        >,
+    >,
+    Error,
+> {
+    let stream = tokio::io::BufReader::new(
+        get_remote_stream_gz_async(file_path.clone(), object_storage_options).await?,
+    );
+    let reader = vcf::r#async::io::Reader::new(stream);
+    Ok(reader)
 }
 
 pub async fn get_remote_vcf_reader(
@@ -64,6 +83,23 @@ pub fn get_local_vcf_bgzf_reader(
         .map(vcf::io::Reader::new)
 }
 
+pub async fn get_local_vcf_gz_reader(
+    file_path: String,
+) -> Result<
+    vcf::r#async::io::Reader<
+        tokio::io::BufReader<GzipDecoder<tokio::io::BufReader<tokio::fs::File>>>,
+    >,
+    Error,
+> {
+    let reader = tokio::fs::File::open(file_path)
+        .await
+        .map(tokio::io::BufReader::new)
+        .map(GzipDecoder::new)
+        .map(tokio::io::BufReader::new)
+        .map(vcf::r#async::io::Reader::new);
+    reader
+}
+
 pub async fn get_local_vcf_reader(
     file_path: String,
 ) -> Result<vcf::r#async::io::Reader<BufReader<tokio::fs::File>>, Error> {
@@ -84,6 +120,10 @@ pub async fn get_local_vcf_header(
         CompressionType::BGZF => {
             let mut reader = get_local_vcf_bgzf_reader(file_path, thread_num)?;
             reader.read_header()?
+        }
+        CompressionType::GZIP => {
+            let mut reader = get_local_vcf_gz_reader(file_path).await?;
+            reader.read_header().await?
         }
         CompressionType::NONE => {
             let mut reader = get_local_vcf_reader(file_path).await?;
@@ -111,6 +151,10 @@ pub async fn get_remote_vcf_header(
             let mut reader = get_remote_vcf_bgzf_reader(file_path, object_storage_options).await;
             reader.read_header().await?
         }
+        CompressionType::GZIP => {
+            let mut reader = get_remote_vcf_gz_reader(file_path, object_storage_options).await?;
+            reader.read_header().await?
+        }
         CompressionType::NONE => {
             let mut reader = get_remote_vcf_reader(file_path, object_storage_options).await;
             reader.read_header().await?
@@ -134,6 +178,7 @@ pub async fn get_header(
 
 pub enum VcfRemoteReader {
     BGZF(vcf::r#async::io::Reader<AsyncReader<StreamReader<FuturesBytesStream, Bytes>>>),
+    GZIP(vcf::r#async::io::Reader<BufReader<GzipDecoder<StreamReader<FuturesBytesStream, Bytes>>>>),
     PLAIN(vcf::r#async::io::Reader<StreamReader<FuturesBytesStream, Bytes>>),
 }
 
@@ -149,6 +194,12 @@ impl VcfRemoteReader {
                 let reader = get_remote_vcf_bgzf_reader(file_path, object_storage_options).await;
                 VcfRemoteReader::BGZF(reader)
             }
+            CompressionType::GZIP => {
+                let reader = get_remote_vcf_gz_reader(file_path, object_storage_options)
+                    .await
+                    .unwrap();
+                VcfRemoteReader::GZIP(reader)
+            }
             CompressionType::NONE => {
                 let reader = get_remote_vcf_reader(file_path, object_storage_options).await;
                 VcfRemoteReader::PLAIN(reader)
@@ -160,6 +211,7 @@ impl VcfRemoteReader {
     pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
         match self {
             VcfRemoteReader::BGZF(reader) => reader.read_header().await,
+            VcfRemoteReader::GZIP(reader) => reader.read_header().await,
             VcfRemoteReader::PLAIN(reader) => reader.read_header().await,
         }
     }
@@ -167,6 +219,10 @@ impl VcfRemoteReader {
     pub async fn describe(&mut self) -> Result<arrow::array::RecordBatch, Error> {
         match self {
             VcfRemoteReader::BGZF(reader) => {
+                let header = reader.read_header().await?;
+                Ok(get_info_fields(&header).await)
+            }
+            VcfRemoteReader::GZIP(reader) => {
                 let header = reader.read_header().await?;
                 Ok(get_info_fields(&header).await)
             }
@@ -180,6 +236,7 @@ impl VcfRemoteReader {
     pub async fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
         match self {
             VcfRemoteReader::BGZF(reader) => reader.records().boxed(),
+            VcfRemoteReader::GZIP(reader) => reader.records().boxed(),
             VcfRemoteReader::PLAIN(reader) => reader.records().boxed(),
         }
     }
@@ -187,6 +244,7 @@ impl VcfRemoteReader {
 
 pub enum VcfLocalReader {
     BGZF(Reader<MultithreadedReader<File>>),
+    GZIP(vcf::r#async::io::Reader<BufReader<GzipDecoder<tokio::io::BufReader<tokio::fs::File>>>>),
     PLAIN(vcf::r#async::io::Reader<BufReader<tokio::fs::File>>),
 }
 
@@ -197,6 +255,10 @@ impl VcfLocalReader {
             CompressionType::BGZF => {
                 let reader = get_local_vcf_bgzf_reader(file_path, thread_num).unwrap();
                 VcfLocalReader::BGZF(reader)
+            }
+            CompressionType::GZIP => {
+                let reader = get_local_vcf_gz_reader(file_path).await.unwrap();
+                VcfLocalReader::GZIP(reader)
             }
             CompressionType::NONE => {
                 let reader = get_local_vcf_reader(file_path).await.unwrap();
@@ -209,6 +271,7 @@ impl VcfLocalReader {
     pub async fn read_header(&mut self) -> Result<vcf::Header, Error> {
         match self {
             VcfLocalReader::BGZF(reader) => reader.read_header(),
+            VcfLocalReader::GZIP(reader) => reader.read_header().await,
             VcfLocalReader::PLAIN(reader) => reader.read_header().await,
         }
     }
@@ -216,6 +279,7 @@ impl VcfLocalReader {
     pub fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
         match self {
             VcfLocalReader::BGZF(reader) => stream::iter(reader.records()).boxed(),
+            VcfLocalReader::GZIP(reader) => reader.records().boxed(),
             VcfLocalReader::PLAIN(reader) => reader.records().boxed(),
         }
     }
@@ -224,6 +288,10 @@ impl VcfLocalReader {
         match self {
             VcfLocalReader::BGZF(reader) => {
                 let header = reader.read_header()?;
+                Ok(get_info_fields(&header).await)
+            }
+            VcfLocalReader::GZIP(reader) => {
+                let header = reader.read_header().await?;
                 Ok(get_info_fields(&header).await)
             }
             VcfLocalReader::PLAIN(reader) => {
