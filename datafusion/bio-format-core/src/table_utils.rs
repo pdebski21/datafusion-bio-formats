@@ -1,8 +1,9 @@
+use datafusion::arrow;
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder, MapBuilder,
-    StringBuilder,
+    Array, ArrayBuilder, ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder,
+    MapBuilder, StringBuilder, StructBuilder,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::arrow::error::ArrowError;
 use std::sync::Arc;
 
@@ -16,24 +17,26 @@ pub enum OptionalField {
     ArrayBooleanBuilder(ListBuilder<BooleanBuilder>),
     Utf8Builder(StringBuilder),
     ArrayUtf8Builder(ListBuilder<StringBuilder>),
-    MapBuilder(MapBuilder<StringBuilder, StringBuilder>),
+    StructBuilder(StructBuilder), //
 }
 
 impl OptionalField {
     pub fn new(data_type: &DataType, batch_size: usize) -> Result<OptionalField, ArrowError> {
         match data_type {
-            DataType::Map(field, _) => {
-                if let DataType::Utf8 = field.data_type() {
-                    let key_builder = StringBuilder::with_capacity(batch_size, batch_size);
-                    let value_builder = StringBuilder::with_capacity(batch_size, batch_size);
-                    let map_builder =
-                        MapBuilder::with_capacity(None, key_builder, value_builder, batch_size);
-                    Ok(OptionalField::MapBuilder(map_builder))
-                } else {
-                    Err(ArrowError::SchemaError(
-                        "Map data type must have Utf8 as key".into(),
-                    ))
-                }
+            DataType::Struct(..) => {
+                let tag_builder = StringBuilder::with_capacity(batch_size, batch_size);
+                let value_builder = StringBuilder::with_capacity(batch_size, batch_size);
+                let fields = vec![
+                    Field::new("tag", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
+                ];
+                Ok(OptionalField::StructBuilder(StructBuilder::new(
+                    fields.clone(),
+                    vec![
+                        Box::new(tag_builder) as Box<dyn ArrayBuilder>,
+                        Box::new(value_builder) as Box<dyn ArrayBuilder>,
+                    ],
+                )))
             }
 
             DataType::Int32 => Ok(OptionalField::Int32Builder(Int32Builder::with_capacity(
@@ -79,6 +82,22 @@ impl OptionalField {
         }
     }
 
+    pub fn append_struct(&mut self, key: &str, value: &str) -> Result<(), ArrowError> {
+        match self {
+            OptionalField::StructBuilder(builder) => {
+                builder
+                    .field_builder::<StringBuilder>(0)
+                    .unwrap()
+                    .append_value(key);
+                builder
+                    .field_builder::<StringBuilder>(0)
+                    .unwrap()
+                    .append_value(value);
+                Ok(builder.append(true))
+            }
+            _ => Err(ArrowError::SchemaError("Expected StructBuilder".into())),
+        }
+    }
     pub fn append_int(&mut self, value: i32) -> Result<(), ArrowError> {
         match self {
             OptionalField::Int32Builder(builder) => Ok(builder.append_value(value)),
@@ -151,7 +170,10 @@ impl OptionalField {
             OptionalField::ArrayFloat32Builder(builder) => Ok(builder.append_null()),
             OptionalField::BooleanBuilder(builder) => Ok(builder.append_null()),
             OptionalField::ArrayBooleanBuilder(builder) => Ok(builder.append_null()),
-            OptionalField::MapBuilder(builder) => Ok(builder.append(false)?),
+            OptionalField::StructBuilder(builder) => {
+                builder.append_null();
+                Ok(())
+            }
         }
     }
 
@@ -165,7 +187,10 @@ impl OptionalField {
             OptionalField::ArrayFloat32Builder(builder) => Ok(Arc::new(builder.finish())),
             OptionalField::BooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
             OptionalField::ArrayBooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
-            OptionalField::MapBuilder(builder) => Ok(Arc::new(builder.finish())),
+            OptionalField::StructBuilder(builder) => {
+                let struct_array = builder.finish();
+                Ok(Arc::new(struct_array))
+            }
         }
     }
 }

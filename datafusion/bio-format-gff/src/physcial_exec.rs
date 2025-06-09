@@ -98,16 +98,10 @@ fn set_attribute_builders(
     batch_size: usize,
     attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
 ) {
-    let entry_struct = Field::new(
-        //FIXME: duplicates
-        "entries",
-        DataType::Struct(Fields::from(vec![
-            Field::new("tag", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
-        ])),
-        false,
-    );
-    let dt = DataType::Map(FieldRef::from(entry_struct), false);
+    let dt = DataType::Struct(Fields::from(vec![
+        Field::new("tag", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, true),
+    ]));
     let field = OptionalField::new(&dt.clone(), batch_size).unwrap();
     attribute_builders.0.push("attributes".to_string());
     attribute_builders.1.push(dt);
@@ -122,18 +116,13 @@ fn load_attributes(
     let attributes = record.attributes();
 
     for (tag, value) in attributes.as_ref().iter() {
-        let name = &attribute_builders.0[0];
         let builder = &mut attribute_builders.2[0];
-
         let value = value;
-
         match value {
-            Value::String(v) => {
-                builder.append_string(<&str>::try_from(v).unwrap())?;
-            }
-            Value::Array(v) => {
-                builder.append_array_string(v.iter().map(|v| v.to_string()).collect())?;
-            }
+            Value::String(v) => builder.append_struct(&*tag.to_string(), &*v.to_string())?,
+            // Value::Array(v) => {
+            //     builder.append_array_string(v.iter().map(|v| v.to_string()).collect())?;
+            // }
             _ => panic!("Unsupported value type"),
         }
     }

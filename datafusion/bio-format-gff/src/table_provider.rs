@@ -40,15 +40,7 @@ pub fn get_attribute_names_and_types(attributes: &Attributes) -> (Vec<String>, V
     (attribute_names, attribute_types)
 }
 fn determine_schema() -> datafusion::common::Result<SchemaRef> {
-    // let entry_struct = Field::new(
-    //     "entries",
-    //     DataType::Struct(Fields::from(vec![
-    //         Field::new("tag", DataType::Utf8, false),
-    //         Field::new("value", DataType::Utf8, true),
-    //     ])),
-    //     false,
-    // );
-    let mut fields = vec![
+    let fields = vec![
         Field::new("chrom", DataType::Utf8, false),
         Field::new("start", DataType::UInt32, false),
         Field::new("end", DataType::UInt32, false),
@@ -66,12 +58,6 @@ fn determine_schema() -> datafusion::common::Result<SchemaRef> {
             true,
         ),
     ];
-
-    // let attributes = get_attribute_names_and_types(attributes);
-    // for (name, dtype) in attributes.0.iter().zip(attributes.1.iter()) {
-    //     fields.push(Field::new(name, dtype.clone(), true));
-    // }
-
     let schema = Schema::new(fields);
     debug!("Schema: {:?}", schema);
     Ok(Arc::new(schema))
