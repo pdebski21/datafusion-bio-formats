@@ -54,12 +54,12 @@ fn determine_schema() -> datafusion::common::Result<SchemaRef> {
             DataType::List(FieldRef::from(Box::new(
                 // each list element is a struct { tag: Utf8 (non-null), value: Utf8 (nullable) }
                 Field::new(
-                    "attribute", // inner field name (can be any unique identifier)
+                    "item",
                     DataType::Struct(Fields::from(vec![
                         Field::new("tag", DataType::Utf8, false), // tag must be non-null
                         Field::new("value", DataType::Utf8, true), // value may be null
                     ])),
-                    false, // each struct element itself is non-null
+                    true, // each struct element itself is non-null
                 ),
             ))),
             true, // the "attributes" list itself may be null

@@ -97,14 +97,12 @@ impl OptionalField {
         match self {
             OptionalField::ArrayStructBuilder(list_builder) => {
                 // 1) start a new list slot
-                list_builder.append(true);
 
                 // 2) grab the StructBuilder inside
                 let struct_builder = list_builder.values();
 
                 // 3) push each Attribute
                 for Attribute { tag, value } in items {
-                    struct_builder.append(true);
                     // field 0: tag (non-null)
                     struct_builder
                         .field_builder::<StringBuilder>(0)
@@ -115,8 +113,10 @@ impl OptionalField {
                         .field_builder::<StringBuilder>(1)
                         .unwrap()
                         .append_option(value.as_deref());
+                    struct_builder.append(true);
                 }
 
+                list_builder.append(true);
                 Ok(())
             }
             other => Err(ArrowError::SchemaError(format!(
@@ -221,6 +221,14 @@ impl OptionalField {
         }
     }
 }
+
+// pub fn builders_to_arrays(builders: &mut OptionalField) -> Vec<Arc<dyn Array>> {
+//     vec![builders]
+//         .iter_mut()
+//         .map(|f| f.finish())
+//         .collect::<Result<Vec<_>, _>>()
+//         .unwrap()
+// }
 
 pub fn builders_to_arrays(builders: &mut Vec<OptionalField>) -> Vec<Arc<dyn Array>> {
     builders

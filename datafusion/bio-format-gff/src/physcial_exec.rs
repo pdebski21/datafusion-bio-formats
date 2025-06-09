@@ -7,6 +7,7 @@ use datafusion::arrow::array::{
     UInt32Array, UInt32Builder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaRef};
+use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -94,28 +95,27 @@ impl ExecutionPlan for GffExec {
     }
 }
 
-fn set_attribute_builders(
-    batch_size: usize,
-    attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
-) {
-    let dt = DataType::Struct(Fields::from(vec![
-        Field::new("tag", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, true),
-    ]));
-    let field = OptionalField::new(&dt.clone(), batch_size).unwrap();
-    attribute_builders.0.push("attributes".to_string());
-    attribute_builders.1.push(dt);
-    attribute_builders.2.push(field);
-    // }
-}
+// fn set_attribute_builders(
+//     batch_size: usize,
+//     attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
+// ) {
+//     let dt = DataType::Struct(Fields::from(vec![
+//         Field::new("tag", DataType::Utf8, false),
+//         Field::new("value", DataType::Utf8, true),
+//     ]));
+//     let field = OptionalField::new(&dt.clone(), batch_size).unwrap();
+//     attribute_builders.0.push("attributes".to_string());
+//     attribute_builders.1.push(dt);
+//     attribute_builders.2.push(field);
+//     // }
+// }
 
 fn load_attributes(
     record: RecordBuf,
-    attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
+    builder: &mut Vec<OptionalField>,
 ) -> Result<(), datafusion::arrow::error::ArrowError> {
     let attributes = record.attributes();
     let mut vec_attributes: Vec<Attribute> = Vec::new();
-    let builder = &mut attribute_builders.2[0];
     for (tag, value) in attributes.as_ref().iter() {
         debug!("Loading attribute: {} with value: {:?}", tag, value);
         match value {
@@ -137,7 +137,7 @@ fn load_attributes(
             _ => panic!("Unsupported value type"),
         }
     }
-    builder.append_array_struct(vec_attributes)?;
+    builder[0].append_array_struct(vec_attributes)?;
     Ok(())
 }
 
@@ -153,9 +153,20 @@ async fn get_remote_gff_stream(
     let mut reader =
         GffRemoteReader::new(file_path.clone(), object_storage_options.unwrap()).await?;
 
-    let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
-        (Vec::new(), Vec::new(), Vec::new());
-    set_attribute_builders(batch_size, &mut attribute_builders);
+    // let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
+    //     (Vec::new(), Vec::new(), Vec::new());
+    // set_attribute_builders(batch_size, &mut attribute_builders);
+    let mut builder = vec![OptionalField::new(
+        &DataType::List(FieldRef::new(Field::new(
+            "attribute",
+            DataType::Struct(Fields::from(vec![
+                Field::new("tag", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            true,
+        ))),
+        batch_size,
+    )?];
 
     let stream = try_stream! {
         // Create vectors for accumulating record data.
@@ -200,7 +211,7 @@ async fn get_remote_gff_stream(
                 Phase::One => 1,
                 Phase::Two => 2,
             }) );
-            load_attributes(record, &mut attribute_builders)?;
+            load_attributes(record, &mut builder)?;
             record_num += 1;
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
@@ -215,7 +226,7 @@ async fn get_remote_gff_stream(
                     &scores,
                     &strand,
                     &phase,
-                    Some(&builders_to_arrays(&mut attribute_builders.2)), projection.clone(),
+                    Some(&builders_to_arrays(&mut builder)), projection.clone(),
 
 
                 )?;
@@ -247,7 +258,7 @@ async fn get_remote_gff_stream(
                 &scores,
                 &strand,
                 &phase,
-                Some(&builders_to_arrays(&mut attribute_builders.2)), projection.clone(),
+                Some(&builders_to_arrays(&mut builder)), projection.clone(),
                 // if infos.is_empty() { None } else { Some(&infos) },
             )?;
             yield batch;
@@ -281,9 +292,17 @@ async fn get_local_gff(
 
     let mut record_num = 0;
 
-    let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
-        (Vec::new(), Vec::new(), Vec::new());
-    set_attribute_builders(batch_size, &mut attribute_builders);
+    let mut builder = vec![OptionalField::new(
+        &DataType::List(FieldRef::new(Field::new(
+            "attribute",
+            DataType::Struct(Fields::from(vec![
+                Field::new("tag", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            true,
+        ))),
+        batch_size,
+    )?];
 
     let stream = try_stream! {
 
@@ -309,7 +328,7 @@ async fn get_local_gff(
                 Phase::One => 1,
                 Phase::Two => 2,
             }) );
-            load_attributes(record, &mut attribute_builders)?;
+            load_attributes(record, &mut builder)?;
             record_num += 1;
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
@@ -324,7 +343,7 @@ async fn get_local_gff(
                     &scores,
                     &strand,
                     &phase,
-                    Some(&builders_to_arrays(&mut attribute_builders.2)), projection.clone(),
+                    Some(&builders_to_arrays(&mut builder)), projection.clone(),
                     // if infos.is_empty() { None } else { Some(&infos) },
 
                 )?;
@@ -356,7 +375,7 @@ async fn get_local_gff(
                 &scores,
                 &strand,
                 &phase,
-                Some(&builders_to_arrays(&mut attribute_builders.2)), projection.clone(),
+                Some(&builders_to_arrays(&mut builder)), projection.clone(),
                 // if infos.is_empty() { None } else { Some(&infos) },
             )?;
             yield batch;
