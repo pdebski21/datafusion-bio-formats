@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
     Array, Float32Array, Float32Builder, Float64Array, NullArray, RecordBatch, StringArray,
     UInt32Array, UInt32Builder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaRef};
 use datafusion::common::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -29,7 +29,6 @@ use std::sync::Arc;
 pub struct GffExec {
     pub(crate) file_path: String,
     pub(crate) schema: SchemaRef,
-    pub(crate) attributes: Attributes,
     pub(crate) projection: Option<Vec<usize>>,
     pub(crate) cache: PlanProperties,
     pub(crate) limit: Option<usize>,
@@ -87,7 +86,6 @@ impl ExecutionPlan for GffExec {
             schema.clone(),
             batch_size,
             self.thread_num,
-            self.attributes.clone(),
             self.projection.clone(),
             self.object_storage_options.clone(),
         );
@@ -98,40 +96,45 @@ impl ExecutionPlan for GffExec {
 
 fn set_attribute_builders(
     batch_size: usize,
-    attributes_names_and_types: (Vec<String>, Vec<DataType>),
     attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
 ) {
-    let (attribute_names, attribute_types) = attributes_names_and_types;
-    for (name, data_type) in attribute_names.into_iter().zip(attribute_types.into_iter()) {
-        let field = OptionalField::new(&data_type, batch_size).unwrap();
-        attribute_builders.0.push(name);
-        attribute_builders.1.push(data_type);
-        attribute_builders.2.push(field);
-    }
+    let entry_struct = Field::new(
+        //FIXME: duplicates
+        "entries",
+        DataType::Struct(Fields::from(vec![
+            Field::new("tag", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ])),
+        false,
+    );
+    let dt = DataType::Map(FieldRef::from(entry_struct), false);
+    let field = OptionalField::new(&dt.clone(), batch_size).unwrap();
+    attribute_builders.0.push("attributes".to_string());
+    attribute_builders.1.push(dt);
+    attribute_builders.2.push(field);
+    // }
 }
 
 fn load_attributes(
     record: RecordBuf,
     attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
 ) -> Result<(), datafusion::arrow::error::ArrowError> {
-    for i in 0..attribute_builders.2.len() {
-        let name = &attribute_builders.0[i];
-        let builder = &mut attribute_builders.2[i];
-        let attributes = record.attributes();
-        let value = attributes.get(name.as_ref());
+    let attributes = record.attributes();
+
+    for (tag, value) in attributes.as_ref().iter() {
+        let name = &attribute_builders.0[0];
+        let builder = &mut attribute_builders.2[0];
+
+        let value = value;
 
         match value {
-            Some(v) => match v {
-                Value::String(v) => {
-                    builder.append_string(<&str>::try_from(v).unwrap())?;
-                }
-                Value::Array(v) => {
-                    builder.append_array_string(v.iter().map(|v| v.to_string()).collect())?;
-                }
-                _ => panic!("Unsupported value type"),
-            },
-            None => builder.append_null()?,
-            _ => {}
+            Value::String(v) => {
+                builder.append_string(<&str>::try_from(v).unwrap())?;
+            }
+            Value::Array(v) => {
+                builder.append_array_string(v.iter().map(|v| v.to_string()).collect())?;
+            }
+            _ => panic!("Unsupported value type"),
         }
     }
     Ok(())
@@ -141,7 +144,6 @@ async fn get_remote_gff_stream(
     file_path: String,
     schema: SchemaRef,
     batch_size: usize,
-    attributes: Attributes,
     projection: Option<Vec<usize>>,
     object_storage_options: Option<ObjectStorageOptions>,
 ) -> datafusion::error::Result<
@@ -149,10 +151,10 @@ async fn get_remote_gff_stream(
 > {
     let mut reader =
         GffRemoteReader::new(file_path.clone(), object_storage_options.unwrap()).await?;
-    let attributes = get_attribute_names_and_types(&attributes.clone());
+
     let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
         (Vec::new(), Vec::new(), Vec::new());
-    set_attribute_builders(batch_size, attributes, &mut attribute_builders);
+    set_attribute_builders(batch_size, &mut attribute_builders);
 
     let stream = try_stream! {
         // Create vectors for accumulating record data.
@@ -168,7 +170,7 @@ async fn get_remote_gff_stream(
         // add attributes fields
 
 
-        debug!("Attribute fields: {:?}", attribute_builders);
+        // debug!("Attribute fields: {:?}", attribute_builders);
 
         let mut record_num = 0;
         let mut batch_num = 0;
@@ -258,7 +260,6 @@ async fn get_local_gff(
     schema: SchemaRef,
     batch_size: usize,
     thread_num: Option<usize>,
-    attributes: Attributes,
     projection: Option<Vec<usize>>,
 ) -> datafusion::error::Result<impl futures::Stream<Item = datafusion::error::Result<RecordBatch>>>
 {
@@ -278,10 +279,10 @@ async fn get_local_gff(
     let mut reader = GffLocalReader::new(file_path.clone(), thread_num).await?;
 
     let mut record_num = 0;
-    let attributes = get_attribute_names_and_types(&attributes.clone());
+
     let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
         (Vec::new(), Vec::new(), Vec::new());
-    set_attribute_builders(batch_size, attributes, &mut attribute_builders);
+    set_attribute_builders(batch_size, &mut attribute_builders);
 
     let stream = try_stream! {
 
@@ -443,7 +444,6 @@ async fn get_stream(
     schema_ref: SchemaRef,
     batch_size: usize,
     thread_num: Option<usize>,
-    attributes: Attributes,
     projection: Option<Vec<usize>>,
     object_storage_options: Option<ObjectStorageOptions>,
 ) -> datafusion::error::Result<SendableRecordBatchStream> {
@@ -460,7 +460,6 @@ async fn get_stream(
                 schema.clone(),
                 batch_size,
                 thread_num,
-                attributes,
                 projection,
             )
             .await?;
@@ -471,7 +470,6 @@ async fn get_stream(
                 file_path.clone(),
                 schema.clone(),
                 batch_size,
-                attributes,
                 projection,
                 object_storage_options,
             )

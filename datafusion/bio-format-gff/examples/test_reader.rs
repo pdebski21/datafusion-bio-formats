@@ -21,11 +21,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(record_result) = records.next().await {
         match record_result {
             Ok(record) => {
-                // println!("Record: {:?}", record);
+                println!("Record: {:?}", record);
                 cnt += 1;
-                // break;
             }
             Err(e) => eprintln!("Error reading record: {}", e),
+        }
+        if cnt >= 2 {
+            break; // Limit to 10 records for testing
         }
     }
 

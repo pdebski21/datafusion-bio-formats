@@ -1,7 +1,7 @@
 use crate::physcial_exec::GffExec;
 use crate::storage::{GffLocalReader, GffRemoteReader};
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::TableType;
 use datafusion::logical_expr::Expr;
@@ -39,7 +39,15 @@ pub fn get_attribute_names_and_types(attributes: &Attributes) -> (Vec<String>, V
     }
     (attribute_names, attribute_types)
 }
-fn determine_schema(attributes: &Attributes) -> datafusion::common::Result<SchemaRef> {
+fn determine_schema() -> datafusion::common::Result<SchemaRef> {
+    // let entry_struct = Field::new(
+    //     "entries",
+    //     DataType::Struct(Fields::from(vec![
+    //         Field::new("tag", DataType::Utf8, false),
+    //         Field::new("value", DataType::Utf8, true),
+    //     ])),
+    //     false,
+    // );
     let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
         Field::new("start", DataType::UInt32, false),
@@ -49,12 +57,20 @@ fn determine_schema(attributes: &Attributes) -> datafusion::common::Result<Schem
         Field::new("score", DataType::Float32, true),
         Field::new("strand", DataType::Utf8, false),
         Field::new("phase", DataType::UInt32, true), //FIXME:: can be downcasted to 8
+        Field::new(
+            "attributes",
+            DataType::Struct(Fields::from(vec![
+                Field::new("tag", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            true,
+        ),
     ];
 
-    let attributes = get_attribute_names_and_types(attributes);
-    for (name, dtype) in attributes.0.iter().zip(attributes.1.iter()) {
-        fields.push(Field::new(name, dtype.clone(), true));
-    }
+    // let attributes = get_attribute_names_and_types(attributes);
+    // for (name, dtype) in attributes.0.iter().zip(attributes.1.iter()) {
+    //     fields.push(Field::new(name, dtype.clone(), true));
+    // }
 
     let schema = Schema::new(fields);
     debug!("Schema: {:?}", schema);
@@ -64,7 +80,6 @@ fn determine_schema(attributes: &Attributes) -> datafusion::common::Result<Schem
 #[derive(Clone, Debug)]
 pub struct GffTableProvider {
     file_path: String,
-    attributes: Attributes,
     schema: SchemaRef,
     thread_num: Option<usize>,
     object_storage_options: Option<ObjectStorageOptions>,
@@ -76,29 +91,9 @@ impl GffTableProvider {
         thread_num: Option<usize>,
         object_storage_options: Option<ObjectStorageOptions>,
     ) -> datafusion::common::Result<Self> {
-        let storage_type = get_storage_type(file_path.clone());
-        let attributes = match storage_type {
-            StorageType::LOCAL => {
-                let mut reader = block_on(GffLocalReader::new(file_path.clone(), 1))?;
-                block_on(reader.get_attributes())
-            }
-            StorageType::AZBLOB | StorageType::S3 | StorageType::GCS => {
-                let mut reader = block_on(GffRemoteReader::new(
-                    file_path.clone(),
-                    object_storage_options.clone().unwrap(),
-                ))?;
-                block_on(reader.get_attributes())
-            }
-            _ => {
-                return Err(datafusion::error::DataFusionError::Execution(
-                    "Unsupported storage type for GFF files".to_string(),
-                ));
-            }
-        };
-        let schema = determine_schema(&attributes)?;
+        let schema = determine_schema()?;
         Ok(Self {
             file_path,
-            attributes,
             schema,
             thread_num,
             object_storage_options,
@@ -156,7 +151,6 @@ impl TableProvider for GffTableProvider {
             ),
             file_path: self.file_path.clone(),
             schema: schema.clone(),
-            attributes: self.attributes.clone(),
             projection: projection.cloned(),
             limit,
             thread_num: self.thread_num,
