@@ -1,7 +1,11 @@
 use datafusion_bio_format_gff::storage::{GffLocalReader, GffRemoteReader};
+use datafusion_bio_format_gff::table_provider::GffTableProvider;
 use futures_util::StreamExt;
+use std::sync::Arc;
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     // let file_path = "gs://polars-bio-it/gencode.v38.annotation.gff3.bgz".to_string();
     let file_path = "/Users/mwiewior/Downloads/gencode.v38.annotation.gff3.bgz".to_string();
     let object_storage_options = datafusion_bio_format_core::object_storage::ObjectStorageOptions {
@@ -15,22 +19,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // let mut reader = GffRemoteReader::new(file_path, object_storage_options).await?;
     // let mut reader = GffRemoteReader::new(file_path, object_storage_options).await?;
-    let mut reader = GffLocalReader::new(file_path, 1).await?;
-    let mut records = reader.read_records().await;
-    let mut cnt = 0;
-    while let Some(record_result) = records.next().await {
-        match record_result {
-            Ok(record) => {
-                println!("Record: {:?}", record);
-                cnt += 1;
-            }
-            Err(e) => eprintln!("Error reading record: {}", e),
-        }
-        if cnt >= 2 {
-            break; // Limit to 10 records for testing
-        }
-    }
+    let table = GffTableProvider::new(file_path.clone(), Some(1), None).unwrap();
 
-    println!("Total records read: {}", cnt);
+    let ctx = datafusion::execution::context::SessionContext::new();
+    ctx.register_table("gff_table", Arc::new(table)).unwrap();
+    let df = ctx.sql("SELECT attributes FROM gff_table").await?;
+    let results = df.limit(0, Some(1));
+    let batches = results.unwrap().show().await?;
+    // for batch in batches {
+    //     println!("{:?}", batch);
+    // }
+
+    // let mut reader = GffLocalReader::new(file_path, 1).await?;
+    // let mut records = reader.read_records().await;
+    // let mut cnt = 0;
+    // while let Some(record_result) = records.next().await {
+    //     match record_result {
+    //         Ok(record) => {
+    //             println!("Record: {:?}", record);
+    //             cnt += 1;
+    //         }
+    //         Err(e) => eprintln!("Error reading record: {}", e),
+    //     }
+    //     if cnt >= 2 {
+    //         break; // Limit to 10 records for testing
+    //     }
+    // }
+    //
+    // println!("Total records read: {}", cnt);
     Ok(())
 }

@@ -20,6 +20,7 @@ async-trait.workspace = true
 
 noodles-gff = {version = "0.50.0", features = ["async"]}
 log = "0.4.27"
+env_logger = "0.11.8"
 
 [[example]]
 name = "test_reader"

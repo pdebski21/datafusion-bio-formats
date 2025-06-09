@@ -14,7 +14,7 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 use datafusion_bio_format_core::object_storage::{
     ObjectStorageOptions, StorageType, get_storage_type,
 };
-use datafusion_bio_format_core::table_utils::{OptionalField, builders_to_arrays};
+use datafusion_bio_format_core::table_utils::{Attribute, OptionalField, builders_to_arrays};
 use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use noodles_gff::feature::RecordBuf;
@@ -114,18 +114,30 @@ fn load_attributes(
     attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
 ) -> Result<(), datafusion::arrow::error::ArrowError> {
     let attributes = record.attributes();
-
+    let mut vec_attributes: Vec<Attribute> = Vec::new();
+    let builder = &mut attribute_builders.2[0];
     for (tag, value) in attributes.as_ref().iter() {
-        let builder = &mut attribute_builders.2[0];
-        let value = value;
+        debug!("Loading attribute: {} with value: {:?}", tag, value);
         match value {
-            Value::String(v) => builder.append_struct(&*tag.to_string(), &*v.to_string())?,
-            // Value::Array(v) => {
-            //     builder.append_array_string(v.iter().map(|v| v.to_string()).collect())?;
-            // }
+            Value::String(v) => vec_attributes.push(Attribute {
+                tag: tag.to_string(),
+                value: Some(v.to_string()),
+            }),
+            Value::Array(v) => {
+                let val = &*v
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                vec_attributes.push(Attribute {
+                    tag: tag.to_string(),
+                    value: Some(val.to_string()),
+                })
+            }
             _ => panic!("Unsupported value type"),
         }
     }
+    builder.append_array_struct(vec_attributes)?;
     Ok(())
 }
 

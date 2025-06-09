@@ -3,9 +3,14 @@ use datafusion::arrow::array::{
     Array, ArrayBuilder, ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder,
     MapBuilder, StringBuilder, StructBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::arrow::error::ArrowError;
 use std::sync::Arc;
+
+pub struct Attribute {
+    pub tag: String,
+    pub value: Option<String>,
+}
 
 #[derive(Debug)]
 pub enum OptionalField {
@@ -17,28 +22,12 @@ pub enum OptionalField {
     ArrayBooleanBuilder(ListBuilder<BooleanBuilder>),
     Utf8Builder(StringBuilder),
     ArrayUtf8Builder(ListBuilder<StringBuilder>),
-    StructBuilder(StructBuilder), //
+    ArrayStructBuilder(ListBuilder<StructBuilder>),
 }
 
 impl OptionalField {
     pub fn new(data_type: &DataType, batch_size: usize) -> Result<OptionalField, ArrowError> {
         match data_type {
-            DataType::Struct(..) => {
-                let tag_builder = StringBuilder::with_capacity(batch_size, batch_size);
-                let value_builder = StringBuilder::with_capacity(batch_size, batch_size);
-                let fields = vec![
-                    Field::new("tag", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, true),
-                ];
-                Ok(OptionalField::StructBuilder(StructBuilder::new(
-                    fields.clone(),
-                    vec![
-                        Box::new(tag_builder) as Box<dyn ArrayBuilder>,
-                        Box::new(value_builder) as Box<dyn ArrayBuilder>,
-                    ],
-                )))
-            }
-
             DataType::Int32 => Ok(OptionalField::Int32Builder(Int32Builder::with_capacity(
                 batch_size,
             ))),
@@ -73,6 +62,28 @@ impl OptionalField {
                         batch_size,
                     ),
                 )),
+                DataType::Struct(_) => {
+                    let tag_builder = StringBuilder::with_capacity(batch_size, batch_size);
+                    let value_builder = StringBuilder::with_capacity(batch_size, batch_size);
+
+                    let struct_fields = Fields::from(vec![
+                        Field::new("tag", DataType::Utf8, false),  // non-null
+                        Field::new("value", DataType::Utf8, true), // nullable
+                    ]);
+                    let struct_builder = StructBuilder::new(
+                        struct_fields,
+                        vec![
+                            Box::new(tag_builder) as Box<dyn ArrayBuilder>,
+                            Box::new(value_builder) as Box<dyn ArrayBuilder>,
+                        ],
+                    );
+
+                    // 3) wrap StructBuilder in a ListBuilder
+                    Ok(OptionalField::ArrayStructBuilder(
+                        ListBuilder::with_capacity(struct_builder, batch_size),
+                    ))
+                }
+
                 _ => Err(ArrowError::SchemaError(
                     "Unsupported list inner data type".into(),
                 )),
@@ -82,20 +93,36 @@ impl OptionalField {
         }
     }
 
-    pub fn append_struct(&mut self, key: &str, value: &str) -> Result<(), ArrowError> {
+    pub fn append_array_struct(&mut self, items: Vec<Attribute>) -> Result<(), ArrowError> {
         match self {
-            OptionalField::StructBuilder(builder) => {
-                builder
-                    .field_builder::<StringBuilder>(0)
-                    .unwrap()
-                    .append_value(key);
-                builder
-                    .field_builder::<StringBuilder>(0)
-                    .unwrap()
-                    .append_value(value);
-                Ok(builder.append(true))
+            OptionalField::ArrayStructBuilder(list_builder) => {
+                // 1) start a new list slot
+                list_builder.append(true);
+
+                // 2) grab the StructBuilder inside
+                let struct_builder = list_builder.values();
+
+                // 3) push each Attribute
+                for Attribute { tag, value } in items {
+                    struct_builder.append(true);
+                    // field 0: tag (non-null)
+                    struct_builder
+                        .field_builder::<StringBuilder>(0)
+                        .unwrap()
+                        .append_value(&tag);
+                    // field 1: value (nullable)
+                    struct_builder
+                        .field_builder::<StringBuilder>(1)
+                        .unwrap()
+                        .append_option(value.as_deref());
+                }
+
+                Ok(())
             }
-            _ => Err(ArrowError::SchemaError("Expected StructBuilder".into())),
+            other => Err(ArrowError::SchemaError(format!(
+                "Expected ArrayStructBuilder, found {:?}",
+                other
+            ))),
         }
     }
     pub fn append_int(&mut self, value: i32) -> Result<(), ArrowError> {
@@ -170,7 +197,7 @@ impl OptionalField {
             OptionalField::ArrayFloat32Builder(builder) => Ok(builder.append_null()),
             OptionalField::BooleanBuilder(builder) => Ok(builder.append_null()),
             OptionalField::ArrayBooleanBuilder(builder) => Ok(builder.append_null()),
-            OptionalField::StructBuilder(builder) => {
+            OptionalField::ArrayStructBuilder(builder) => {
                 builder.append_null();
                 Ok(())
             }
@@ -187,7 +214,7 @@ impl OptionalField {
             OptionalField::ArrayFloat32Builder(builder) => Ok(Arc::new(builder.finish())),
             OptionalField::BooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
             OptionalField::ArrayBooleanBuilder(builder) => Ok(Arc::new(builder.finish())),
-            OptionalField::StructBuilder(builder) => {
+            OptionalField::ArrayStructBuilder(builder) => {
                 let struct_array = builder.finish();
                 Ok(Arc::new(struct_array))
             }

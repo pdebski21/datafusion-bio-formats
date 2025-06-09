@@ -994,6 +994,7 @@ dependencies = [
  "bytes",
  "datafusion",
  "datafusion-bio-format-core",
+ "env_logger",
  "futures",
  "futures-util",
  "log",

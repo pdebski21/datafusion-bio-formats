@@ -51,11 +51,18 @@ fn determine_schema() -> datafusion::common::Result<SchemaRef> {
         Field::new("phase", DataType::UInt32, true), //FIXME:: can be downcasted to 8
         Field::new(
             "attributes",
-            DataType::Struct(Fields::from(vec![
-                Field::new("tag", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, true),
-            ])),
-            true,
+            DataType::List(FieldRef::from(Box::new(
+                // each list element is a struct { tag: Utf8 (non-null), value: Utf8 (nullable) }
+                Field::new(
+                    "attribute", // inner field name (can be any unique identifier)
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("tag", DataType::Utf8, false), // tag must be non-null
+                        Field::new("value", DataType::Utf8, true), // value may be null
+                    ])),
+                    false, // each struct element itself is non-null
+                ),
+            ))),
+            true, // the "attributes" list itself may be null
         ),
     ];
     let schema = Schema::new(fields);
