@@ -18,29 +18,36 @@ use noodles_gff::feature::record_buf::attributes::field::Value;
 use std::any::Any;
 use std::sync::Arc;
 
-pub fn get_attribute_names_and_types(attributes: &Attributes) -> (Vec<String>, Vec<DataType>) {
+pub fn get_attribute_names_and_types(attributes: Vec<String>) -> (Vec<String>, Vec<DataType>) {
     let mut attribute_names = Vec::new();
     let mut attribute_types = Vec::new();
 
-    for (tag, value) in attributes.as_ref().iter() {
-        attribute_names.push(tag.to_string());
-        match value {
-            Value::String(s) => {
+    for attr in attributes {
+        match attr.split_once(':') {
+            Some((n, t)) => {
+                if t.to_lowercase() == "string" {
+                    attribute_types.push(DataType::Utf8);
+                } else if t.to_lowercase() == "array" {
+                    attribute_types.push(DataType::List(Arc::new(Field::new(
+                        n.to_string(),
+                        DataType::Utf8,
+                        true,
+                    ))));
+                } else {
+                    attribute_types.push(DataType::Utf8); // Default to Utf8 if type is unknown
+                }
+                attribute_names.push(n.to_string());
+            }
+            None => {
                 attribute_types.push(DataType::Utf8);
+                attribute_names.push(attr.to_string());
             }
-            Value::Array(arr) => {
-                attribute_types.push(DataType::List(Arc::new(Field::new(
-                    tag.to_string(),
-                    DataType::Utf8,
-                    true,
-                ))));
-            }
-        }
+        };
     }
     (attribute_names, attribute_types)
 }
-fn determine_schema() -> datafusion::common::Result<SchemaRef> {
-    let fields = vec![
+fn determine_schema(attr_fields: Option<Vec<String>>) -> datafusion::common::Result<SchemaRef> {
+    let mut fields = vec![
         Field::new("chrom", DataType::Utf8, false),
         Field::new("start", DataType::UInt32, false),
         Field::new("end", DataType::UInt32, false),
@@ -49,22 +56,28 @@ fn determine_schema() -> datafusion::common::Result<SchemaRef> {
         Field::new("score", DataType::Float32, true),
         Field::new("strand", DataType::Utf8, false),
         Field::new("phase", DataType::UInt32, true), //FIXME:: can be downcasted to 8
-        Field::new(
-            "attributes",
-            DataType::List(FieldRef::from(Box::new(
-                // each list element is a struct { tag: Utf8 (non-null), value: Utf8 (nullable) }
-                Field::new(
-                    "item",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("tag", DataType::Utf8, false), // tag must be non-null
-                        Field::new("value", DataType::Utf8, true), // value may be null
-                    ])),
-                    true, // each struct element itself is non-null
-                ),
-            ))),
-            true, // the "attributes" list itself may be null
-        ),
     ];
+    match attr_fields {
+        None => fields.push(Field::new(
+            "attributes",
+            DataType::List(FieldRef::from(Box::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("tag", DataType::Utf8, false), // tag must be non-null
+                    Field::new("value", DataType::Utf8, true), // value may be null
+                ])),
+                true,
+            )))),
+            true,
+        )),
+        _ => {
+            let attributes = get_attribute_names_and_types(attr_fields.unwrap());
+            for (name, dtype) in attributes.0.iter().zip(attributes.1.iter()) {
+                fields.push(Field::new(name, dtype.clone(), true));
+            }
+        }
+    }
+
     let schema = Schema::new(fields);
     debug!("Schema: {:?}", schema);
     Ok(Arc::new(schema))
@@ -73,6 +86,7 @@ fn determine_schema() -> datafusion::common::Result<SchemaRef> {
 #[derive(Clone, Debug)]
 pub struct GffTableProvider {
     file_path: String,
+    attr_fields: Option<Vec<String>>,
     schema: SchemaRef,
     thread_num: Option<usize>,
     object_storage_options: Option<ObjectStorageOptions>,
@@ -81,12 +95,14 @@ pub struct GffTableProvider {
 impl GffTableProvider {
     pub fn new(
         file_path: String,
+        attr_fields: Option<Vec<String>>,
         thread_num: Option<usize>,
         object_storage_options: Option<ObjectStorageOptions>,
     ) -> datafusion::common::Result<Self> {
-        let schema = determine_schema()?;
+        let schema = determine_schema(attr_fields.clone())?;
         Ok(Self {
             file_path,
+            attr_fields,
             schema,
             thread_num,
             object_storage_options,
@@ -143,6 +159,7 @@ impl TableProvider for GffTableProvider {
                 ExecutionMode::Bounded,
             ),
             file_path: self.file_path.clone(),
+            attr_fields: self.attr_fields.clone(),
             schema: schema.clone(),
             projection: projection.cloned(),
             limit,

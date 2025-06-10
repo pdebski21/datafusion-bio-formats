@@ -19,13 +19,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // let mut reader = GffRemoteReader::new(file_path, object_storage_options).await?;
     // let mut reader = GffRemoteReader::new(file_path, object_storage_options).await?;
-    let table = GffTableProvider::new(file_path.clone(), Some(1), None).unwrap();
+    let table = GffTableProvider::new(
+        file_path.clone(),
+        // None,
+        Some(vec!["ID".to_string()]),
+        Some(1),
+        None,
+    )
+    .unwrap();
 
     let ctx = datafusion::execution::context::SessionContext::new();
+    ctx.sql("set datafusion.execution.skip_physical_aggregate_schema_check=true")
+        .await?;
     ctx.register_table("gff_table", Arc::new(table)).unwrap();
-    let df = ctx.sql("SELECT attributes FROM gff_table").await?;
-    let results = df.limit(0, Some(1));
-    let batches = results.unwrap().show().await?;
+    let df = ctx.sql("SELECT start,`ID` FROM gff_table").await?;
+    let results = df.collect().await?;
+    println!("Count: {:?}", results.iter().count());
+    // let batches = results.await.unwrap().show().await?;
     // for batch in batches {
     //     println!("{:?}", batch);
     // }

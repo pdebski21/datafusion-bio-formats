@@ -222,14 +222,6 @@ impl OptionalField {
     }
 }
 
-// pub fn builders_to_arrays(builders: &mut OptionalField) -> Vec<Arc<dyn Array>> {
-//     vec![builders]
-//         .iter_mut()
-//         .map(|f| f.finish())
-//         .collect::<Result<Vec<_>, _>>()
-//         .unwrap()
-// }
-
 pub fn builders_to_arrays(builders: &mut Vec<OptionalField>) -> Vec<Arc<dyn Array>> {
     builders
         .iter_mut()

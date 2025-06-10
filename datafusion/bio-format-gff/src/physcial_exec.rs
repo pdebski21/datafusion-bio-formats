@@ -29,6 +29,7 @@ use std::sync::Arc;
 #[allow(dead_code)]
 pub struct GffExec {
     pub(crate) file_path: String,
+    pub(crate) attr_fields: Option<Vec<String>>,
     pub(crate) schema: SchemaRef,
     pub(crate) projection: Option<Vec<usize>>,
     pub(crate) cache: PlanProperties,
@@ -84,6 +85,7 @@ impl ExecutionPlan for GffExec {
         let schema = self.schema.clone();
         let fut = get_stream(
             self.file_path.clone(),
+            self.attr_fields.clone(),
             schema.clone(),
             batch_size,
             self.thread_num,
@@ -95,20 +97,44 @@ impl ExecutionPlan for GffExec {
     }
 }
 
-// fn set_attribute_builders(
-//     batch_size: usize,
-//     attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
-// ) {
-//     let dt = DataType::Struct(Fields::from(vec![
-//         Field::new("tag", DataType::Utf8, false),
-//         Field::new("value", DataType::Utf8, true),
-//     ]));
-//     let field = OptionalField::new(&dt.clone(), batch_size).unwrap();
-//     attribute_builders.0.push("attributes".to_string());
-//     attribute_builders.1.push(dt);
-//     attribute_builders.2.push(field);
-//     // }
-// }
+fn set_attribute_builders(
+    batch_size: usize,
+    attributes_names_and_types: (Vec<String>, Vec<DataType>),
+    attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
+) {
+    let (attribute_names, attribute_types) = attributes_names_and_types;
+    for (name, data_type) in attribute_names.into_iter().zip(attribute_types.into_iter()) {
+        let field = OptionalField::new(&data_type, batch_size).unwrap();
+        attribute_builders.0.push(name);
+        attribute_builders.1.push(data_type);
+        attribute_builders.2.push(field);
+    }
+}
+
+fn load_attributes_unnest(
+    record: RecordBuf,
+    attribute_builders: &mut (Vec<String>, Vec<DataType>, Vec<OptionalField>),
+) -> Result<(), datafusion::arrow::error::ArrowError> {
+    for i in 0..attribute_builders.2.len() {
+        let name = &attribute_builders.0[i];
+        let builder = &mut attribute_builders.2[i];
+        let attributes = record.attributes();
+        let value = attributes.get(name.as_ref());
+
+        match value {
+            Some(v) => match v {
+                Value::String(v) => {
+                    builder.append_string(&*v.to_string())?;
+                }
+                Value::Array(v) => {
+                    builder.append_array_string(v.iter().map(|v| v.to_string()).collect())?;
+                }
+            },
+            None => builder.append_null()?,
+        }
+    }
+    Ok(())
+}
 
 fn load_attributes(
     record: RecordBuf,
@@ -134,7 +160,6 @@ fn load_attributes(
                     value: Some(val.to_string()),
                 })
             }
-            _ => panic!("Unsupported value type"),
         }
     }
     builder[0].append_array_struct(vec_attributes)?;
@@ -143,6 +168,7 @@ fn load_attributes(
 
 async fn get_remote_gff_stream(
     file_path: String,
+    attr_fields: Option<Vec<String>>,
     schema: SchemaRef,
     batch_size: usize,
     projection: Option<Vec<usize>>,
@@ -153,9 +179,23 @@ async fn get_remote_gff_stream(
     let mut reader =
         GffRemoteReader::new(file_path.clone(), object_storage_options.unwrap()).await?;
 
-    // let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
-    //     (Vec::new(), Vec::new(), Vec::new());
-    // set_attribute_builders(batch_size, &mut attribute_builders);
+    //unnest builder
+    let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
+        (Vec::new(), Vec::new(), Vec::new());
+
+    let unnest_enable = match attr_fields {
+        Some(attr_fields) => {
+            let attribute_names_and_types = get_attribute_names_and_types(attr_fields.clone());
+            set_attribute_builders(
+                batch_size,
+                attribute_names_and_types,
+                &mut attribute_builders,
+            );
+            true
+        }
+        _ => false,
+    };
+    //nested builder
     let mut builder = vec![OptionalField::new(
         &DataType::List(FieldRef::new(Field::new(
             "attribute",
@@ -179,14 +219,8 @@ async fn get_remote_gff_stream(
         let mut strand: Vec<String> = Vec::with_capacity(batch_size);
         let mut phase: Vec<Option<u32>> = Vec::with_capacity(batch_size);
 
-        // add attributes fields
-
-
-        // debug!("Attribute fields: {:?}", attribute_builders);
-
         let mut record_num = 0;
         let mut batch_num = 0;
-
 
         // Process records one by one.
 
@@ -211,7 +245,13 @@ async fn get_remote_gff_stream(
                 Phase::One => 1,
                 Phase::Two => 2,
             }) );
-            load_attributes(record, &mut builder)?;
+            if unnest_enable {
+                load_attributes_unnest(record, &mut attribute_builders)?
+            }
+            else {
+                load_attributes(record, &mut builder)?
+            }
+
             record_num += 1;
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
@@ -226,7 +266,12 @@ async fn get_remote_gff_stream(
                     &scores,
                     &strand,
                     &phase,
-                    Some(&builders_to_arrays(&mut builder)), projection.clone(),
+                    Some(&builders_to_arrays(
+                        if unnest_enable {
+                            &mut attribute_builders.2
+                        } else {
+                            &mut builder
+                        })), projection.clone(),
 
 
                 )?;
@@ -258,7 +303,12 @@ async fn get_remote_gff_stream(
                 &scores,
                 &strand,
                 &phase,
-                Some(&builders_to_arrays(&mut builder)), projection.clone(),
+                 Some(&builders_to_arrays(
+                        if unnest_enable {
+                            &mut attribute_builders.2
+                        } else {
+                            &mut builder
+                        })), projection.clone(),
                 // if infos.is_empty() { None } else { Some(&infos) },
             )?;
             yield batch;
@@ -269,6 +319,7 @@ async fn get_remote_gff_stream(
 
 async fn get_local_gff(
     file_path: String,
+    attr_fields: Option<Vec<String>>,
     schema: SchemaRef,
     batch_size: usize,
     thread_num: Option<usize>,
@@ -289,9 +340,23 @@ async fn get_local_gff(
     let file_path = file_path.clone();
     let thread_num = thread_num.unwrap_or(1);
     let mut reader = GffLocalReader::new(file_path.clone(), thread_num).await?;
+    //unnest builder
+    let mut attribute_builders: (Vec<String>, Vec<DataType>, Vec<OptionalField>) =
+        (Vec::new(), Vec::new(), Vec::new());
 
-    let mut record_num = 0;
-
+    let unnest_enable = match attr_fields {
+        Some(attr_fields) => {
+            let attribute_names_and_types = get_attribute_names_and_types(attr_fields.clone());
+            set_attribute_builders(
+                batch_size,
+                attribute_names_and_types,
+                &mut attribute_builders,
+            );
+            true
+        }
+        _ => false,
+    };
+    //nested builder
     let mut builder = vec![OptionalField::new(
         &DataType::List(FieldRef::new(Field::new(
             "attribute",
@@ -303,6 +368,7 @@ async fn get_local_gff(
         ))),
         batch_size,
     )?];
+    let mut record_num = 0;
 
     let stream = try_stream! {
 
@@ -328,7 +394,12 @@ async fn get_local_gff(
                 Phase::One => 1,
                 Phase::Two => 2,
             }) );
-            load_attributes(record, &mut builder)?;
+            if unnest_enable {
+                load_attributes_unnest(record, &mut attribute_builders)?
+            }
+            else {
+                load_attributes(record, &mut builder)?
+            }
             record_num += 1;
             // Once the batch size is reached, build and yield a record batch.
             if record_num % batch_size == 0 {
@@ -343,9 +414,12 @@ async fn get_local_gff(
                     &scores,
                     &strand,
                     &phase,
-                    Some(&builders_to_arrays(&mut builder)), projection.clone(),
-                    // if infos.is_empty() { None } else { Some(&infos) },
-
+                   Some(&builders_to_arrays(
+                        if unnest_enable {
+                            &mut attribute_builders.2
+                        } else {
+                            &mut builder
+                        })), projection.clone(),
                 )?;
                 batch_num += 1;
                 debug!("Batch number: {}", batch_num);
@@ -375,8 +449,12 @@ async fn get_local_gff(
                 &scores,
                 &strand,
                 &phase,
-                Some(&builders_to_arrays(&mut builder)), projection.clone(),
-                // if infos.is_empty() { None } else { Some(&infos) },
+                 Some(&builders_to_arrays(
+                        if unnest_enable {
+                            &mut attribute_builders.2
+                        } else {
+                            &mut builder
+                        })), projection.clone(),
             )?;
             yield batch;
         }
@@ -461,6 +539,7 @@ fn build_record_batch(
 
 async fn get_stream(
     file_path: String,
+    attr_fields: Option<Vec<String>>,
     schema_ref: SchemaRef,
     batch_size: usize,
     thread_num: Option<usize>,
@@ -477,6 +556,7 @@ async fn get_stream(
         StorageType::LOCAL => {
             let stream = get_local_gff(
                 file_path.clone(),
+                attr_fields.clone(),
                 schema.clone(),
                 batch_size,
                 thread_num,
@@ -488,6 +568,7 @@ async fn get_stream(
         StorageType::GCS | StorageType::S3 | StorageType::AZBLOB => {
             let stream = get_remote_gff_stream(
                 file_path.clone(),
+                attr_fields.clone(),
                 schema.clone(),
                 batch_size,
                 projection,
