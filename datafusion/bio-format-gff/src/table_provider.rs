@@ -1,5 +1,4 @@
 use crate::physcial_exec::GffExec;
-use crate::storage::{GffLocalReader, GffRemoteReader};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
@@ -7,14 +6,8 @@ use datafusion::datasource::TableType;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::{ExecutionMode, ExecutionPlan, PlanProperties};
-use datafusion_bio_format_core::object_storage::{
-    ObjectStorageOptions, StorageType, get_storage_type,
-};
-use futures::executor::block_on;
-use futures_util::StreamExt;
+use datafusion_bio_format_core::object_storage::ObjectStorageOptions;
 use log::debug;
-use noodles_gff::feature::record_buf::Attributes;
-use noodles_gff::feature::record_buf::attributes::field::Value;
 use std::any::Any;
 use std::sync::Arc;
 

@@ -4,13 +4,12 @@ use datafusion_bio_format_core::object_storage::{
     CompressionType, ObjectStorageOptions, get_compression_type, get_remote_stream,
     get_remote_stream_bgzf_async, get_remote_stream_gz_async,
 };
-use futures::executor::block_on;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, stream};
 use noodles::bgzf;
 use noodles_gff as gff;
+use noodles_gff::feature::RecordBuf;
 use noodles_gff::feature::record_buf::Attributes;
-use noodles_gff::feature::{Record, RecordBuf};
 use noodles_gff::io::Reader;
 use opendal::FuturesBytesStream;
 use std::fs::File;

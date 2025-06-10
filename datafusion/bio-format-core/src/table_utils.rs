@@ -1,9 +1,8 @@
-use datafusion::arrow;
 use datafusion::arrow::array::{
     Array, ArrayBuilder, ArrayRef, BooleanBuilder, Float32Builder, Int32Builder, ListBuilder,
-    MapBuilder, StringBuilder, StructBuilder,
+    StringBuilder, StructBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion::arrow::error::ArrowError;
 use std::sync::Arc;
 

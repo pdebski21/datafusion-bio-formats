@@ -3,11 +3,9 @@ use crate::table_provider::get_attribute_names_and_types;
 use async_stream::__private::AsyncStream;
 use async_stream::try_stream;
 use datafusion::arrow::array::{
-    Array, Float32Array, Float32Builder, Float64Array, NullArray, RecordBatch, StringArray,
-    UInt32Array, UInt32Builder,
+    Array, Float32Builder, NullArray, RecordBatch, StringArray, UInt32Array, UInt32Builder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaRef};
-use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -20,7 +18,6 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::debug;
 use noodles_gff::feature::RecordBuf;
 use noodles_gff::feature::record::{Phase, Strand};
-use noodles_gff::feature::record_buf::Attributes;
 use noodles_gff::feature::record_buf::attributes::field::Value;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
@@ -166,6 +163,22 @@ fn load_attributes(
     Ok(())
 }
 
+fn standardize_strand(strand: Strand) -> String {
+    match strand {
+        Strand::Forward => "+".to_string(),
+        Strand::Reverse => "-".to_string(),
+        Strand::Unknown => "?".to_string(),
+        Strand::None => ".".to_string(),
+    }
+}
+
+fn standardize_phase(phase: Phase) -> u32 {
+    match phase {
+        Phase::Zero => 0,
+        Phase::One => 1,
+        Phase::Two => 2,
+    }
+}
 async fn get_remote_gff_stream(
     file_path: String,
     attr_fields: Option<Vec<String>>,
@@ -233,18 +246,8 @@ async fn get_remote_gff_stream(
             ty.push(record.ty().to_string());
             source.push(record.source().to_string());
             scores.push(record.score());
-            strand.push(match record.strand() {
-                Strand::Forward => "+".to_string(),
-                Strand::Reverse => "-".to_string(),
-                Strand::Unknown => "?".to_string(),
-                Strand::None => ".".to_string(),
-
-            }) ;
-            phase.push(record.phase().map(|p| match p {
-                Phase::Zero => 0,
-                Phase::One => 1,
-                Phase::Two => 2,
-            }) );
+            strand.push(standardize_strand(record.strand()));
+            phase.push(record.phase().map(|p| standardize_phase(p)) );
             if unnest_enable {
                 load_attributes_unnest(record, &mut attribute_builders)?
             }
@@ -382,18 +385,8 @@ async fn get_local_gff(
             ty.push(record.ty().to_string());
             source.push(record.source().to_string());
             scores.push(record.score());
-            strand.push(match record.strand() {
-                Strand::Forward => "+".to_string(),
-                Strand::Reverse => "-".to_string(),
-                Strand::Unknown => "?".to_string(),
-                Strand::None => ".".to_string(),
-
-            }) ;
-            phase.push(record.phase().map(|p| match p {
-                Phase::Zero => 0,
-                Phase::One => 1,
-                Phase::Two => 2,
-            }) );
+            strand.push(standardize_strand(record.strand())) ;
+            phase.push(record.phase().map(|p|  standardize_phase(p)) );
             if unnest_enable {
                 load_attributes_unnest(record, &mut attribute_builders)?
             }
