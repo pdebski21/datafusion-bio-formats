@@ -1,3 +1,3 @@
-mod physcial_exec;
+mod physical_exec;
 pub mod storage;
 pub mod table_provider;

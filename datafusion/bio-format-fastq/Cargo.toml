@@ -15,6 +15,9 @@ noodles-fastq = {version = "0.19.0", features = ["async"]}
 futures.workspace = true
 futures-util.workspace = true
 async-compression.workspace = true
+async-stream = "0.3.6"
+log = "0.4.27"
+async-trait = "0.1.88"
 
 [[example]]
 name = "test_reader"
