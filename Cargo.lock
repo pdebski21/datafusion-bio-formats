@@ -916,14 +916,17 @@ dependencies = [
 name = "datafusion-bio-format-bam"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
+ "async-trait",
  "bytes",
  "datafusion",
  "datafusion-bio-format-core",
  "futures",
  "futures-util",
- "noodles",
+ "log",
  "noodles-bam 0.81.0",
  "noodles-bgzf 0.36.0",
+ "noodles-sam 0.77.0",
  "opendal",
  "tokio",
  "tokio-util",

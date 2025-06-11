@@ -3,10 +3,10 @@ use datafusion_bio_format_core::object_storage::{
 };
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, stream};
-use noodles::bam;
-use noodles::bam::Record;
-use noodles::bam::io::Reader;
-use noodles_bgzf;
+use noodles_bam as bam;
+use noodles_bam::Record;
+use noodles_bam::io::Reader;
+use noodles_bgzf as bgzf;
 use noodles_bgzf::MultithreadedReader;
 use opendal::FuturesBytesStream;
 use std::fs::File;
@@ -18,13 +18,11 @@ pub async fn get_remote_bam_reader(
     file_path: String,
     object_storage_options: ObjectStorageOptions,
 ) -> Result<
-    bam::r#async::io::Reader<
-        noodles_bgzf::AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>,
-    >,
+    bam::r#async::io::Reader<bgzf::AsyncReader<StreamReader<FuturesBytesStream, bytes::Bytes>>>,
     Error,
 > {
     let stream = get_remote_stream(file_path.clone(), object_storage_options).await?;
-    let reader = bam::r#async::io::Reader::new(StreamReader::new(stream));
+    let reader = bam::r#async::io::Reader::from(bgzf::AsyncReader::new(StreamReader::new(stream)));
     Ok(reader)
 }
 

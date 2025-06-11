@@ -1,4 +1,4 @@
-use crate::physical_exec::FastqExec;
+use crate::physical_exec::BamExec;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
@@ -14,7 +14,14 @@ use std::sync::Arc;
 fn determine_schema() -> datafusion::common::Result<SchemaRef> {
     let fields = vec![
         Field::new("name", DataType::Utf8, false),
-        Field::new("description", DataType::Utf8, true),
+        Field::new("chrom", DataType::Utf8, false),
+        Field::new("start", DataType::UInt32, false),
+        Field::new("end", DataType::UInt32, false),
+        Field::new("flags", DataType::UInt32, false), //FIXME:: optimize storage
+        Field::new("cigar", DataType::Utf8, false),
+        Field::new("mapping_quality", DataType::UInt32, false),
+        Field::new("mate_chrom", DataType::Utf8, false),
+        Field::new("mate_start", DataType::UInt32, false),
         Field::new("sequence", DataType::Utf8, false),
         Field::new("quality_scores", DataType::Utf8, false),
     ];
@@ -24,14 +31,14 @@ fn determine_schema() -> datafusion::common::Result<SchemaRef> {
 }
 
 #[derive(Clone, Debug)]
-pub struct FastqTableProvider {
+pub struct BamTableProvider {
     file_path: String,
     schema: SchemaRef,
     thread_num: Option<usize>,
     object_storage_options: Option<ObjectStorageOptions>,
 }
 
-impl FastqTableProvider {
+impl BamTableProvider {
     pub fn new(
         file_path: String,
         thread_num: Option<usize>,
@@ -48,7 +55,7 @@ impl FastqTableProvider {
 }
 
 #[async_trait]
-impl TableProvider for FastqTableProvider {
+impl TableProvider for BamTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
         // todo!()
@@ -71,7 +78,7 @@ impl TableProvider for FastqTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        debug!("FastqTableProvider::scan");
+        debug!("BamTableProvider::scan");
 
         fn project_schema(schema: &SchemaRef, projection: Option<&Vec<usize>>) -> SchemaRef {
             match projection {
@@ -89,7 +96,7 @@ impl TableProvider for FastqTableProvider {
 
         let schema = project_schema(&self.schema, projection);
 
-        Ok(Arc::new(FastqExec {
+        Ok(Arc::new(BamExec {
             cache: PlanProperties::new(
                 EquivalenceProperties::new(schema.clone()),
                 Partitioning::UnknownPartitioning(1),

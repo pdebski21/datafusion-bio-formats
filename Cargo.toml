@@ -11,7 +11,7 @@ datafusion = {version = "43.0.0", features = ["async-compression"]}
 datafusion-execution = "43.0.0"
 async-trait = "0.1.85"
 opendal = { version = "0.53.3", features = ["services-gcs", "services-s3","layers-blocking", "services-azblob", "services-http"] }
-noodles = { version = "0.93.0",  features = ["bam", "sam", "vcf", "bgzf", "async"]}
+noodles = { version = "0.93.0",  features = ["bam", "vcf", "bgzf", "async"]}
 
 noodles-bgzf = { version = "0.36.0",features = ["libdeflate"] }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "rt", "macros"] }
