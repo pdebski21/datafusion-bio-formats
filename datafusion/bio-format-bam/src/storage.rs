@@ -8,10 +8,13 @@ use noodles_bam::Record;
 use noodles_bam::io::Reader;
 use noodles_bgzf as bgzf;
 use noodles_bgzf::MultithreadedReader;
+use noodles_sam::header::ReferenceSequences;
+use noodles_sam::header::record::value::map::ReferenceSequence;
 use opendal::FuturesBytesStream;
 use std::fs::File;
 use std::io::Error;
 use std::num::NonZero;
+use std::ops::Deref;
 use tokio_util::io::StreamReader;
 
 pub async fn get_remote_bam_reader(
@@ -77,12 +80,24 @@ impl BamReader {
     pub async fn read_records(&mut self) -> BoxStream<'_, Result<Record, Error>> {
         match self {
             BamReader::Local(reader) => {
-                reader.read_header().unwrap();
+                // reader.read_header().unwrap();
                 stream::iter(reader.records()).boxed()
             }
             BamReader::Remote(reader) => {
-                reader.read_header().await.unwrap();
+                // reader.read_header().await.unwrap();
                 reader.records().boxed()
+            }
+        }
+    }
+    pub async fn read_sequences(&mut self) -> ReferenceSequences {
+        match self {
+            BamReader::Local(reader) => {
+                let header = reader.read_header().unwrap();
+                header.reference_sequences().clone()
+            }
+            BamReader::Remote(reader) => {
+                let header = reader.read_header().await.unwrap();
+                header.reference_sequences().clone()
             }
         }
     }

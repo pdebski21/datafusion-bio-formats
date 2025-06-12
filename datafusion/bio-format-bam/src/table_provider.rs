@@ -13,15 +13,15 @@ use std::sync::Arc;
 
 fn determine_schema() -> datafusion::common::Result<SchemaRef> {
     let fields = vec![
-        Field::new("name", DataType::Utf8, false),
-        Field::new("chrom", DataType::Utf8, false),
-        Field::new("start", DataType::UInt32, false),
-        Field::new("end", DataType::UInt32, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("chrom", DataType::Utf8, true),
+        Field::new("start", DataType::UInt32, true),
+        Field::new("end", DataType::UInt32, true),
         Field::new("flags", DataType::UInt32, false), //FIXME:: optimize storage
         Field::new("cigar", DataType::Utf8, false),
-        Field::new("mapping_quality", DataType::UInt32, false),
-        Field::new("mate_chrom", DataType::Utf8, false),
-        Field::new("mate_start", DataType::UInt32, false),
+        Field::new("mapping_quality", DataType::UInt32, true),
+        Field::new("mate_chrom", DataType::Utf8, true),
+        Field::new("mate_start", DataType::UInt32, true),
         Field::new("sequence", DataType::Utf8, false),
         Field::new("quality_scores", DataType::Utf8, false),
     ];

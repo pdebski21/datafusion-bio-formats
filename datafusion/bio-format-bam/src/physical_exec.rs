@@ -22,6 +22,7 @@ use noodles_sam::alignment::record::cigar::op::Kind as OpKind;
 use noodles_sam::alignment::{Record, record};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::io;
 use std::io::Error;
 use std::sync::Arc;
 
@@ -106,16 +107,16 @@ async fn get_remote_bam_stream(
 
     let stream = try_stream! {
         // Create vectors for accumulating record data.
-        let mut name: Vec<String> = Vec::with_capacity(batch_size);
-        let mut chrom: Vec<String> = Vec::with_capacity(batch_size);
-        let mut start: Vec<u32> = Vec::with_capacity(batch_size);
-        let mut end : Vec<u32> = Vec::with_capacity(batch_size);
+        let mut name: Vec<Option<String>> = Vec::with_capacity(batch_size);
+        let mut chrom: Vec<Option<String>> = Vec::with_capacity(batch_size);
+        let mut start: Vec<Option<u32>> = Vec::with_capacity(batch_size);
+        let mut end : Vec<Option<u32>> = Vec::with_capacity(batch_size);
 
-        let mut mapping_quality: Vec<u32> = Vec::with_capacity(batch_size);
+        let mut mapping_quality: Vec<Option<u32>> = Vec::with_capacity(batch_size);
         let mut flag : Vec<u32> = Vec::with_capacity(batch_size);
         let mut cigar : Vec<String> = Vec::with_capacity(batch_size);
-        let mut mate_chrom : Vec<String> = Vec::with_capacity(batch_size);
-        let mut mate_start : Vec<u32> = Vec::with_capacity(batch_size);
+        let mut mate_chrom : Vec<Option<String>> = Vec::with_capacity(batch_size);
+        let mut mate_start : Vec<Option<u32>> = Vec::with_capacity(batch_size);
         let mut quality_scores: Vec<String> = Vec::with_capacity(batch_size);
         let mut sequence : Vec<String> = Vec::with_capacity(batch_size);
 
@@ -124,31 +125,69 @@ async fn get_remote_bam_stream(
 
         // Process records one by one.
 
+        let ref_sequences = reader.read_sequences().await;
         let mut records = reader.read_records().await;
+        let names: Vec<_> = ref_sequences.keys().map(|k| k.to_string()).collect();
         while let Some(result) = records.next().await {
             let record = result?;  // propagate errors if any
-            let mut chrom_prefix = String::from("chr");
-            let seq_string = record.sequence().iter()
-                   .map(|p| char::from(p))
-                   .collect();
-            chrom_prefix.push_str(record.reference_sequence_id().unwrap()?.to_string().as_str());
-            name.push(record.name().unwrap().to_string());
-            chrom.push(chrom_prefix);
-            start.push(record.alignment_start().unwrap()?.get() as u32);
-            end.push(record.alignment_end().unwrap()?.get() as u32);
+            match record.name() {
+                Some(read_name) => {
+                    name.push(Some(read_name.to_string()));
+                },
+                _ => {
+                    name.push(None);
+                }
+            };
+            let chrom_name = get_chrom_by_seq_id(
+                record.reference_sequence_id(),
+                &names,
+            );
+            chrom.push(chrom_name);
+            match record.alignment_start() {
+                Some(start_pos) => {
+                    start.push(Some(start_pos?.get() as u32));
+                },
+                None => {
+                    start.push(None);
+                }
+            }
+            match record.alignment_end() {
+                Some(end_pos) => {
+                    end.push(Some(end_pos?.get() as u32));
+                },
+                None => {
+                    end.push(None);
+                }
+            };
+            match record.mapping_quality() {
+                Some(mapping_quality_value) => {
+                    mapping_quality.push(Some(mapping_quality_value.get() as u32));
+                },
+                _ => {
+                    mapping_quality.push(None);
+                }
+            };
+           let seq_string = record.sequence().iter()
+               .map(|p| char::from(p))
+               .collect();
             sequence.push(seq_string);
             quality_scores.push(record.quality_scores().iter()
                 .map(|p| char::from(p+33))
                 .collect::<String>());
-            mapping_quality.push(record.mapping_quality().unwrap().get() as u32);
+
             flag.push(record.flags().bits() as u32);
             cigar.push(record.cigar().iter().map(|p| p.unwrap())
                 .map(|op| cigar_op_to_string(op))
                 .collect::<Vec<String>>().join(""));
-            chrom_prefix = String::from("chr");
-            chrom_prefix.push_str(record.mate_reference_sequence_id().unwrap()?.to_string().as_str());
-            mate_chrom.push(chrom_prefix);
-            mate_start.push(record.mate_alignment_start().unwrap()?.get() as u32);
+            let chrom_name = get_chrom_by_seq_id(
+                record.mate_reference_sequence_id(),
+                &names,
+            );
+            mate_chrom.push(chrom_name);
+            match record.mate_alignment_start()  {
+                Some(start) => mate_start.push(Some(start?.get() as u32)),
+                _ => mate_start.push(None),
+            };
 
 
             record_num += 1;
@@ -220,16 +259,16 @@ async fn get_local_bam(
     projection: Option<Vec<usize>>,
 ) -> datafusion::error::Result<impl futures::Stream<Item = datafusion::error::Result<RecordBatch>>>
 {
-    let mut name: Vec<String> = Vec::with_capacity(batch_size);
-    let mut chrom: Vec<String> = Vec::with_capacity(batch_size);
-    let mut start: Vec<u32> = Vec::with_capacity(batch_size);
-    let mut end: Vec<u32> = Vec::with_capacity(batch_size);
+    let mut name: Vec<Option<String>> = Vec::with_capacity(batch_size);
+    let mut chrom: Vec<Option<String>> = Vec::with_capacity(batch_size);
+    let mut start: Vec<Option<u32>> = Vec::with_capacity(batch_size);
+    let mut end: Vec<Option<u32>> = Vec::with_capacity(batch_size);
 
-    let mut mapping_quality: Vec<u32> = Vec::with_capacity(batch_size);
+    let mut mapping_quality: Vec<Option<u32>> = Vec::with_capacity(batch_size);
     let mut flag: Vec<u32> = Vec::with_capacity(batch_size);
     let mut cigar: Vec<String> = Vec::with_capacity(batch_size);
-    let mut mate_chrom: Vec<String> = Vec::with_capacity(batch_size);
-    let mut mate_start: Vec<u32> = Vec::with_capacity(batch_size);
+    let mut mate_chrom: Vec<Option<String>> = Vec::with_capacity(batch_size);
+    let mut mate_start: Vec<Option<u32>> = Vec::with_capacity(batch_size);
     let mut quality_scores: Vec<String> = Vec::with_capacity(batch_size);
     let mut sequence: Vec<String> = Vec::with_capacity(batch_size);
 
@@ -240,32 +279,70 @@ async fn get_local_bam(
     let mut record_num = 0;
 
     let stream = try_stream! {
+        let ref_sequences = reader.read_sequences().await;
+        let names: Vec<_> = ref_sequences.keys().map(|k| k.to_string()).collect();
         let mut records = reader.read_records().await;
         // let iter_start_time = Instant::now();
         while let Some(result) = records.next().await {
             let record = result?;  // propagate errors if any
-            let mut chrom_prefix = String::from("chr");
             let seq_string = record.sequence().iter()
                    .map(|p| char::from(p))
                    .collect();
-            chrom_prefix.push_str(record.reference_sequence_id().unwrap()?.to_string().as_str());
-            name.push(record.name().unwrap().to_string());
-            chrom.push(chrom_prefix);
-            start.push(record.alignment_start().unwrap()?.get() as u32);
-            end.push(record.alignment_end().unwrap()?.get() as u32);
+            let chrom_name = get_chrom_by_seq_id(
+                record.reference_sequence_id(),
+                &names,
+            );
+            chrom.push(chrom_name);
+            match record.name() {
+                Some(read_name) => {
+                    name.push(Some(read_name.to_string()));
+                },
+                _ => {
+                    name.push(None);
+                }
+            };
+            match record.alignment_start() {
+                Some(start_pos) => {
+                    start.push(Some(start_pos?.get() as u32));
+                },
+                None => {
+                    start.push(None);
+                }
+            }
+            match record.alignment_end() {
+                Some(end_pos) => {
+                    end.push(Some(end_pos?.get() as u32));
+                },
+                None => {
+                    end.push(None);
+                }
+            };
             sequence.push(seq_string);
             quality_scores.push(record.quality_scores().iter()
                 .map(|p| char::from(p+33))
                 .collect::<String>());
-            mapping_quality.push(record.mapping_quality().unwrap().get() as u32);
+
+            match record.mapping_quality() {
+                Some(mapping_quality_value) => {
+                    mapping_quality.push(Some(mapping_quality_value.get() as u32));
+                },
+                None => {
+                    mapping_quality.push(None);
+                }
+            };
             flag.push(record.flags().bits() as u32);
             cigar.push(record.cigar().iter().map(|p| p.unwrap())
                 .map(|op| cigar_op_to_string(op))
                 .collect::<Vec<String>>().join(""));
-            chrom_prefix = String::from("chr");
-            chrom_prefix.push_str(record.mate_reference_sequence_id().unwrap()?.to_string().as_str());
-            mate_chrom.push(chrom_prefix);
-            mate_start.push(record.mate_alignment_start().unwrap()?.get() as u32);
+             let chrom_name = get_chrom_by_seq_id(
+                record.mate_reference_sequence_id(),
+                &names,
+            );
+            mate_chrom.push(chrom_name);
+            match record.mate_alignment_start()  {
+                Some(start) => mate_start.push(Some(start?.get() as u32)),
+                None => mate_start.push(None),
+            };
 
             record_num += 1;
             // Once the batch size is reached, build and yield a record batch.
@@ -329,15 +406,15 @@ async fn get_local_bam(
 
 fn build_record_batch(
     schema: SchemaRef,
-    name: &[String],
-    chrom: &[String],
-    start: &[u32],
-    end: &[u32],
+    name: &[Option<String>],
+    chrom: &[Option<String>],
+    start: &[Option<u32>],
+    end: &[Option<u32>],
     flag: &[u32],
     cigar: &[String],
-    mapping_quality: &[u32],
-    mate_chrom: &[String],
-    mate_start: &[u32],
+    mapping_quality: &[Option<u32>],
+    mate_chrom: &[Option<String>],
+    mate_start: &[Option<u32>],
     sequence: &[String],
     quality_scores: &[String],
     projection: Option<Vec<usize>>,
@@ -458,4 +535,22 @@ fn cigar_op_to_string(op: Op) -> String {
         OpKind::SequenceMismatch => 'X',
     };
     format!("{}{}", op.len(), kind)
+}
+
+fn get_chrom_by_seq_id(rid: Option<io::Result<usize>>, names: &Vec<String>) -> Option<String> {
+    match rid {
+        Some(rid) => {
+            let idx =
+                usize::try_from(rid.unwrap()).expect("reference_sequence_id() should be >= 0");
+            let chrom_name = names
+                .get(idx)
+                .expect("reference_sequence_id() should be in bounds");
+            let mut chrom_name = chrom_name.to_string().to_lowercase();
+            if !chrom_name.starts_with("chr") {
+                chrom_name = format!("chr{}", chrom_name);
+            }
+            Some(chrom_name)
+        }
+        _ => None,
+    }
 }
