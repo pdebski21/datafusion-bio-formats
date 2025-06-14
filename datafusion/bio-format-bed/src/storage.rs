@@ -130,10 +130,6 @@ macro_rules! impl_bed_remote_reader {
                             let reader = get_remote_bed_bgzf_reader::<$n>(file_path, object_storage_options).await.unwrap();
                             BedRemoteReader::BGZF(reader)
                         }
-                        CompressionType::GZIP => {
-                            let reader = get_remote_fastq_gz_reader::<$n>(file_path, object_storage_options).await.unwrap();
-                            BedRemoteReader::GZIP(reader)
-                        }
                         CompressionType::NONE => {
                             let reader = get_remote_bed_reader::<$n>(file_path, object_storage_options).await.unwrap();
                             BedRemoteReader::PLAIN(reader)

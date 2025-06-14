@@ -8,6 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     // let file_path = "gs://polars-bio-it/chainMonDom5Link.bed.bgz".to_string();
+    let file_path = "/tmp/chainMonDom5Link.bed.bgz".to_string();
     let object_storage_options = ObjectStorageOptions {
         allow_anonymous: false,
         enable_request_payer: false,
@@ -19,10 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // let mut reader = BedRemoteReader::new(file_path.clone(), object_storage_options).await;
 
-    // let file_path = "/Users/mwiewior/research/data/AIListTestData/chainMonDom5Link.bed".to_string();
-    let file_path =
-        "/Users/mwiewior/CLionProjects/datafusion-bio-formats/sandbox/chr16_fragile_site.bed.bgz"
-            .to_string();
+    // let file_path = "/tmp/chr16_fragile_site.bed.bgz".to_string();
+    // let file_path =
+    //     "/Users/mwiewior/CLionProjects/datafusion-bio-formats/sandbox/chr16_fragile_site.bed.bgz"
+    //         .to_string();
     // let file_path = "gs://polars-bio-it/chr16_fragile_site.bed.bgz".to_string();
     // let n: usize = 6; // Number of threads
     // let mut reader = BedRemoteReader::<6>::new(file_path, object_storage_options).await;
@@ -37,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx.sql("set datafusion.execution.skip_physical_aggregate_schema_check=true")
         .await?;
     ctx.register_table("example", Arc::new(table)).unwrap();
-    let df = ctx.sql("SELECT * FROM example").await?;
+    let df = ctx.sql("SELECT * FROM example limit 2").await?;
     let results = df.show().await?;
     // println!("Count: {:?}", results);
 

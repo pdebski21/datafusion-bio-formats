@@ -313,9 +313,11 @@ pub async fn get_remote_stream(
             let mut builder = S3::default()
                 .region(
                     &env::var("AWS_REGION").unwrap_or(
-                        S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str())
-                            .await
-                            .unwrap_or("us-east-1".to_string()),
+                        env::var("AWS_DEFAULT_REGION").unwrap_or(
+                            S3::detect_region("https://s3.amazonaws.com", bucket_name.as_str())
+                                .await
+                                .unwrap_or("us-east-1".to_string()),
+                        ),
                     ),
                 )
                 .bucket(bucket_name.as_str())

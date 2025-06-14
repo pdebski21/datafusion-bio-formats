@@ -82,7 +82,7 @@ impl TableProvider for BedTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        debug!("FastqTableProvider::scan");
+        debug!("BedTableProvider::scan");
 
         fn project_schema(schema: &SchemaRef, projection: Option<&Vec<usize>>) -> SchemaRef {
             match projection {
