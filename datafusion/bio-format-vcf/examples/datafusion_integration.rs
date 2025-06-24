@@ -2,8 +2,8 @@
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
-use datafusion_vcf::storage::VcfRemoteReader;
-use datafusion_vcf::table_provider::VcfTableProvider;
+use datafusion_bio_format_vcf::storage::VcfRemoteReader;
+use datafusion_bio_format_vcf::table_provider::VcfTableProvider;
 use std::sync::Arc;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> datafusion::error::Result<()> {
@@ -23,7 +23,21 @@ async fn main() -> datafusion::error::Result<()> {
     ctx.sql("set datafusion.execution.skip_physical_aggregate_schema_check=true")
         .await?;
     // let table_provider = VcfTableProvider::new("/tmp/gnomad.exomes.v4.1.sites.chr21.vcf.bgz".parse().unwrap(), vec!["SVTYPE".parse().unwrap()], vec![], Some(8))?;
-    let table_provider = VcfTableProvider::new(path.clone(), infos, None, Some(4), None, None)?;
+    let table_provider = VcfTableProvider::new(
+        path.clone(),
+        infos, 
+        None, 
+        Some(4), 
+        Some(datafusion_bio_format_core::object_storage::ObjectStorageOptions {
+            chunk_size: Some(1024 * 1024), // Example: 1 MB
+            concurrent_fetches: Some(4),   // Example: 4 concurrent fetches
+            allow_anonymous: true,         // Example: allow anonymous access
+            enable_request_payer: false,   // Example: disable request payer
+            max_retries: Some(3),          // Example: 3 retries
+            timeout: Some(std::time::Duration::from_secs(30).as_secs() as usize), // Example: 30 seconds timeout
+            compression_type: None,        // Example: no compression
+        })
+    )?;
     ctx.register_table("custom_table", Arc::new(table_provider))
         .expect("TODO: panic message");
     // let df = ctx.sql("SELECT svtype, count(*) as cnt FROM custom_table group by svtype").await?;
@@ -31,7 +45,18 @@ async fn main() -> datafusion::error::Result<()> {
     // df.clone().write_csv("/tmp/gnomad.exomes.v4.1.sites.chr21-old.csv", DataFrameWriteOptions::default(), Some(CsvOptions::default())).await?;
     let _df = ctx.sql("SELECT chrom FROM custom_table LIMIT 5").await?;
     // println!("{:?}", df.explain(false, false)?);
-    let mut reader = VcfRemoteReader::new(path, 64, 1).await;
+    let mut reader = VcfRemoteReader::new(
+        path,
+        datafusion_bio_format_core::object_storage::ObjectStorageOptions {
+            chunk_size: Some(1024 * 1024), // Example: 1 MB
+            concurrent_fetches: Some(4),   // Example: 4 concurrent fetches
+            allow_anonymous: true,         // Example: allow anonymous access
+            enable_request_payer: false,   // Example: disable request payer
+            max_retries: Some(3),          // Example: 3 retries
+            timeout: Some(std::time::Duration::from_secs(30).as_secs() as usize), // Example: 30 seconds timeout
+            compression_type: None,        // Example: no compression
+        },
+    ).await;
     let rb = reader.describe().await?;
     // print!("{}", pretty_format_batches(&[rb]).expect("TODO: panic message").to_string());
     let mem_table = MemTable::try_new(rb.schema().clone(), vec![vec![rb]])?;
